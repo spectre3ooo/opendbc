@@ -87,6 +87,10 @@ int get_torque_driver_min(void);
 int get_torque_driver_max(void);
 void set_desired_torque_last(int t);
 void set_rt_torque_last(int t);
+void set_vehicle_speed(int min, int max);
+bool test_steer_torque_rate_up_limits(int desired_torque, int steer_req, int control_type,
+                                      int max_rate_up, float bp_low, float bp_high,
+                                      float rate_low, float rate_high);
 void set_desired_angle_last(int t);
 int get_desired_angle_last();
 void set_angle_meas(int min, int max);
