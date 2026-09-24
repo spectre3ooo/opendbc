@@ -31,8 +31,9 @@ class CarControllerParams:
       self.STEER_DRIVER_ALLOWANCE = 250
       self.STEER_DRIVER_MULTIPLIER = 2
       self.STEER_THRESHOLD = 250
-      self.STEER_DELTA_UP = 2
-      self.STEER_DELTA_DOWN = 3
+      # raised from 2/3 at all speeds: the rate, not the 270 cap, is what limits low speed corners
+      self.STEER_DELTA_UP = 10
+      self.STEER_DELTA_DOWN = 10
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
