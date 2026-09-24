@@ -164,37 +164,6 @@ void set_desired_torque_last(int t){
   desired_torque_last = t;
 }
 
-// raw sample units, see VEHICLE_SPEED_FACTOR
-void set_vehicle_speed(int min, int max){
-  vehicle_speed.min = min;
-  vehicle_speed.max = max;
-}
-
-// Speed scheduled torque rate up limits (TorqueSteeringLimits.dynamic_max_rate_up) have no
-// production safety mode yet, so the generic mechanism in lateral.h is exercised directly from
-// here. Deliberately contains no comparison or arithmetic operators, so it adds no mutation sites.
-bool test_steer_torque_rate_up_limits(int desired_torque, int steer_req, int control_type,
-                                      int max_rate_up, float bp_low, float bp_high,
-                                      float rate_low, float rate_high) {
-  const TorqueSteeringLimits limits = {
-    .max_torque = 1000,
-    .max_rate_up = max_rate_up,
-    .max_rate_down = 1000,
-    .dynamic_max_rate_up = true,
-    .max_rate_up_lookup = {
-      {bp_low, bp_high, bp_high},
-      {rate_low, rate_high, rate_high},
-    },
-    .max_rt_delta = 10000,
-    .type = (SteeringControlType)control_type,
-    // make the driver/motor limits non-binding so the rate up limit is the only active bound
-    .driver_torque_allowance = 0,
-    .driver_torque_multiplier = 0,
-    .max_torque_error = 1000,
-  };
-  return steer_torque_cmd_checks(desired_torque, steer_req, limits);
-}
-
 void set_desired_angle_last(int t){
   desired_angle_last = t;
 }

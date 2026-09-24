@@ -231,8 +231,6 @@ class TorqueSteeringSafetyTestBase(SafetyTestBase, abc.ABC):
   MAX_RATE_DOWN = 0
   MAX_TORQUE_LOOKUP: tuple[list[float], list[int]] = ([0], [0])
   DYNAMIC_MAX_TORQUE = False
-  MAX_RATE_UP_LOOKUP: tuple[list[float], list[int]] = ([0], [0])
-  DYNAMIC_MAX_RATE_UP = False
   MAX_RT_DELTA = 0
 
   NO_STEER_REQ_BIT = False
@@ -247,54 +245,20 @@ class TorqueSteeringSafetyTestBase(SafetyTestBase, abc.ABC):
   def MAX_TORQUE(self):
     return max(self.MAX_TORQUE_LOOKUP[1])
 
-  @staticmethod
-  def _speed_sweep(breakpoints):
-    # test with more precision inside breakpoint range
-    min_speed = min(breakpoints)
-    max_speed = max(breakpoints)
-    return np.concatenate([np.arange(0, min_speed, 5), np.arange(min_speed, max_speed, 0.5), np.arange(max_speed, 40, 5)])
-
   @property
   def _torque_speed_range(self):
-    """Speeds to sweep for tests that exercise the torque magnitude limit"""
     if not self.DYNAMIC_MAX_TORQUE:
       return [0]
     else:
-      return self._speed_sweep(self.MAX_TORQUE_LOOKUP[0])
-
-  @property
-  def _rate_speed_range(self):
-    """Speeds to sweep for tests that exercise the torque rate up limit"""
-    if not self.DYNAMIC_MAX_RATE_UP:
-      return [0]
-    else:
-      return self._speed_sweep(self.MAX_RATE_UP_LOOKUP[0])
-
-  @property
-  def _speed_range(self):
-    """Speeds to sweep for tests that exercise both the torque magnitude and the rate up limit"""
-    breakpoints = []
-    if self.DYNAMIC_MAX_TORQUE:
-      breakpoints += list(self.MAX_TORQUE_LOOKUP[0])
-    if self.DYNAMIC_MAX_RATE_UP:
-      breakpoints += list(self.MAX_RATE_UP_LOOKUP[0])
-    if not breakpoints:
-      return [0]
-    else:
-      return self._speed_sweep(breakpoints)
+      # test with more precision inside breakpoint range
+      min_speed = min(self.MAX_TORQUE_LOOKUP[0])
+      max_speed = max(self.MAX_TORQUE_LOOKUP[0])
+      return np.concatenate([np.arange(0, min_speed, 5), np.arange(min_speed, max_speed, 0.5), np.arange(max_speed, 40, 5)])
 
   def _get_max_torque(self, speed):
     # matches safety fudge
     torque = int(np.interp(speed - 1, self.MAX_TORQUE_LOOKUP[0], self.MAX_TORQUE_LOOKUP[1]) + 1)
     return min(torque, self.MAX_TORQUE)
-
-  def _get_max_rate_up(self, speed):
-    # matches the safety's speed fudge; there is no +1 on the rate, and max_rate_up is
-    # always enforced as a ceiling
-    if not self.DYNAMIC_MAX_RATE_UP:
-      return self.MAX_RATE_UP
-    rate = int(np.interp(speed - 1, self.MAX_RATE_UP_LOOKUP[0], self.MAX_RATE_UP_LOOKUP[1]))
-    return min(rate, self.MAX_RATE_UP)
 
   @abc.abstractmethod
   def _torque_cmd_msg(self, torque, steer_req=1):
@@ -326,21 +290,18 @@ class TorqueSteeringSafetyTestBase(SafetyTestBase, abc.ABC):
             self.assertTrue(self._tx(self._torque_cmd_msg(t)))
 
   def test_non_realtime_limit_up(self):
-    for speed in self._rate_speed_range:
-      self._reset_speed_measurement(speed)
-      max_rate_up = self._get_max_rate_up(speed)
-      self.safety.set_controls_allowed(True)
+    self.safety.set_controls_allowed(True)
 
-      self._set_prev_torque(0)
-      self.assertTrue(self._tx(self._torque_cmd_msg(max_rate_up)))
-      self._set_prev_torque(0)
-      self.assertTrue(self._tx(self._torque_cmd_msg(-max_rate_up)))
+    self._set_prev_torque(0)
+    self.assertTrue(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP)))
+    self._set_prev_torque(0)
+    self.assertTrue(self._tx(self._torque_cmd_msg(-self.MAX_RATE_UP)))
 
-      self._set_prev_torque(0)
-      self.assertFalse(self._tx(self._torque_cmd_msg(max_rate_up + 1)))
-      self.safety.set_controls_allowed(True)
-      self._set_prev_torque(0)
-      self.assertFalse(self._tx(self._torque_cmd_msg(-max_rate_up - 1)))
+    self._set_prev_torque(0)
+    self.assertFalse(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP + 1)))
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(0)
+    self.assertFalse(self._tx(self._torque_cmd_msg(-self.MAX_RATE_UP - 1)))
 
   def test_steer_req_bit(self):
     """Asserts all torque safety modes check the steering request bit"""
@@ -592,16 +553,15 @@ class MotorTorqueSteeringSafetyTest(TorqueSteeringSafetyTestBase, abc.ABC):
     self.safety.set_torque_meas(t, t)
 
   def test_torque_absolute_limits(self):
-    for speed in self._speed_range:
+    for speed in self._torque_speed_range:
       self._reset_speed_measurement(speed)
       max_torque = self._get_max_torque(speed)
-      max_rate_up = self._get_max_rate_up(speed)
       for controls_allowed in [True, False]:
-        for torque in np.arange(-max_torque - 1000, max_torque + 1000, max_rate_up):
+        for torque in np.arange(-max_torque - 1000, max_torque + 1000, self.MAX_RATE_UP):
           self.safety.set_controls_allowed(controls_allowed)
           self.safety.set_rt_torque_last(torque)
           self.safety.set_torque_meas(torque, torque)
-          self.safety.set_desired_torque_last(torque - max_rate_up)
+          self.safety.set_desired_torque_last(torque - self.MAX_RATE_UP)
 
           if controls_allowed:
             send = (-max_torque <= torque <= max_torque)

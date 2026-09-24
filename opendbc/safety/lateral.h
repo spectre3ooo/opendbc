@@ -63,26 +63,12 @@ bool steer_torque_cmd_checks(int desired_torque, int steer_req, const TorqueStee
   uint32_t ts = microsecond_timer_get();
 
   if (controls_allowed || controls_allowed_lateral) {
-    // fudge the speed by 1 m/s so the limits are always slightly above openpilot's in case we
-    // read an updated speed in between torque commands
-    const float fudged_speed = (vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
-
     // Some safety models support variable torque limit based on vehicle speed
     int max_torque = limits.max_torque;
     if (limits.dynamic_max_torque) {
+      const float fudged_speed = (vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
       max_torque = safety_interpolate(limits.max_torque_lookup, fudged_speed) + 1;
       max_torque = SAFETY_CLAMP(max_torque, -limits.max_torque, limits.max_torque);
-    }
-
-    // Some safety models support a variable torque rate up limit based on vehicle speed. Unlike
-    // the torque limit there is no +1 fudge: the rate is an integer on both sides, and the 1 m/s
-    // speed fudge above already keeps this at or above openpilot's rate for a lookup that does
-    // not increase with speed. max_rate_up is always enforced as a ceiling, so a schedule can
-    // only ever tighten the limit, never loosen it.
-    int max_rate_up = limits.max_rate_up;
-    if (limits.dynamic_max_rate_up) {
-      max_rate_up = safety_interpolate(limits.max_rate_up_lookup, fudged_speed);
-      max_rate_up = SAFETY_MIN(max_rate_up, limits.max_rate_up);
     }
 
     // *** global torque limit check ***
@@ -91,11 +77,11 @@ bool steer_torque_cmd_checks(int desired_torque, int steer_req, const TorqueStee
     // *** torque rate limit check ***
     if (limits.type == TorqueDriverLimited) {
       violation |= driver_limit_check(desired_torque, desired_torque_last, &torque_driver,
-                                      max_torque, max_rate_up, limits.max_rate_down,
+                                      max_torque, limits.max_rate_up, limits.max_rate_down,
                                       limits.driver_torque_allowance, limits.driver_torque_multiplier);
     } else {
       violation |= dist_to_meas_check(desired_torque, desired_torque_last, &torque_meas,
-                                      max_rate_up, limits.max_rate_down, limits.max_torque_error);
+                                      limits.max_rate_up, limits.max_rate_down, limits.max_torque_error);
     }
     desired_torque_last = desired_torque;
 
