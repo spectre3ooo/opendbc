@@ -158,6 +158,31 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     .has_steer_req_tolerance = true,
   };
 
+  const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS_LOW_SPEED_RATE = {
+    .max_torque = 270,
+    .max_rt_delta = 150,  // 1.5x what rate 4 can move in 250 ms; at speed the scheduled rate of 2 bounds it far tighter
+    .max_rate_up = 4,     // ceiling: the schedule below can only tighten it
+    .max_rate_down = 3,
+    // Torque rate up scheduled on speed, for platforms whose lateral accel per unit torque was measured
+    // per speed: it roughly halves below 25 mph, so a higher rate there stays within the same ISO 11270
+    // jerk bound that the stock rate of 2 meets at highway speed. Stock rate from 35 mph (15.6 m/s) up.
+    .dynamic_max_rate_up = true,
+    .max_rate_up_lookup = {
+      {8.9, 15.6, 15.6},
+      {4, 2, 2},
+    },
+    .driver_torque_allowance = 250,
+    .driver_torque_multiplier = 2,
+    .type = TorqueDriverLimited,
+
+    // the EPS faults when the steering angle is above a certain threshold for too long. to prevent this,
+    // we allow setting torque actuation bit to 0 while maintaining the requested torque value for two consecutive frames
+    .min_valid_request_frames = 89,
+    .max_invalid_request_frames = 2,
+    .min_valid_request_rt_interval = 810000,  // 810ms; a ~10% buffer on cutting every 90 frames
+    .has_steer_req_tolerance = true,
+  };
+
   bool tx = true;
 
   // steering
@@ -166,7 +191,10 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     int desired_torque = (((msg->data[6] & 0xFU) << 7U) | (msg->data[5] >> 1U)) - 1024U;
     bool steer_req = GET_BIT(msg, 52U);
 
-    if (steer_torque_cmd_checks(desired_torque, steer_req, HYUNDAI_CANFD_STEERING_LIMITS)) {
+    const TorqueSteeringLimits limits = hyundai_canfd_low_speed_rate ? HYUNDAI_CANFD_STEERING_LIMITS_LOW_SPEED_RATE :
+                                        HYUNDAI_CANFD_STEERING_LIMITS;
+
+    if (steer_torque_cmd_checks(desired_torque, steer_req, limits)) {
       tx = false;
     }
   }

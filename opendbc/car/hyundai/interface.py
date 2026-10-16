@@ -1,6 +1,6 @@
 from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR, CarControllerParams, DBC, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -198,6 +198,9 @@ class CarInterface(CarInterfaceBase):
       stock_cp.dashcamOnly = True
 
     if stock_cp.flags & HyundaiFlags.CANFD:
+      if stock_cp.carFingerprint in CarControllerParams.CANFD_LOW_SPEED_RATE_CARS:
+        ret.safetyParam |= HyundaiSafetyFlagsSP.CANFD_LOW_SPEED_RATE
+
       if 0x1fa in fingerprint[CAN.ECAN]:
         ret.flags |= HyundaiFlagsSP.SPEED_LIMIT_AVAILABLE.value
     else:

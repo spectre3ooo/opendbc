@@ -17,7 +17,19 @@ class CarControllerParams:
   ACCEL_MIN = -3.5 # m/s^2
   ACCEL_MAX = 2.0 # m/s^2
 
+  # CAN FD platforms whose lateral accel per unit torque was measured per speed band. It roughly halves
+  # below 25 mph on the Ioniq 5 (sunnypilot docs/lat/learner-bands.md), so these get a higher torque rate
+  # up at low speed for the same ISO 11270 jerk bound, and the stock rate from 35 mph up.
+  # Must match HYUNDAI_CANFD_STEERING_LIMITS_LOW_SPEED_RATE in safety/modes/hyundai_canfd.h.
+  CANFD_LOW_SPEED_RATE_CARS: frozenset[str] = frozenset({"HYUNDAI_IONIQ_5"})
+  CANFD_LOW_SPEED_RATE_LOOKUP = [8.9, 15.6], [4, 2]  # m/s, counts per frame
+  # Measured lateral accel at full torque (m/s^2) by speed, Ioniq 5, upper 90% CI over 947 segments. Beyond the
+  # last point test_lateral_limits rises to the fleet MAX_LAT_ACCEL_MEASURED by 55 mph. This is what lets the
+  # jerk test check a scheduled rate per speed rather than against the highway figure everywhere.
+  CANFD_LOW_SPEED_RATE_MAX_LAT_ACCEL = [4.5, 8.9, 14.5], [1.64, 1.53, 2.02]
+
   def __init__(self, CP):
+    self.STEER_DELTA_UP_LOOKUP: tuple[list[float], list[int]] | None = None
     self.STEER_DELTA_UP = 3
     self.STEER_DELTA_DOWN = 7
     self.STEER_DRIVER_ALLOWANCE = 50
@@ -33,6 +45,8 @@ class CarControllerParams:
       self.STEER_THRESHOLD = 250
       self.STEER_DELTA_UP = 2
       self.STEER_DELTA_DOWN = 3
+      # the car controller sets STEER_DELTA_UP from this every frame; the scalar above is the highway value
+      self.STEER_DELTA_UP_LOOKUP = self.CANFD_LOW_SPEED_RATE_LOOKUP if CP.carFingerprint in self.CANFD_LOW_SPEED_RATE_CARS else None
 
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.

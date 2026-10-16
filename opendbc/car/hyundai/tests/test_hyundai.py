@@ -78,6 +78,17 @@ class TestHyundaiFingerprint(unittest.TestCase):
       CP = CarInterface.get_params(car_model, fingerprint, [], False, False, False)
       assert bool(CP.flags & HyundaiFlags.ALT_LIMITS) == bool(CP.safetyConfigs[-1].safetyParam & HyundaiSafetyFlags.ALT_LIMITS)
 
+  def test_canfd_low_speed_rate(self):
+    # openpilot only schedules the torque rate up when panda's matching schedule is enabled, and vice versa
+    from opendbc.car.hyundai.values import CarControllerParams
+    from opendbc.sunnypilot.car.hyundai.values import HyundaiSafetyFlagsSP
+    for car_model in CAR:
+      CP = CarInterface.get_non_essential_params(car_model)
+      CP_SP = CarInterface.get_non_essential_params_sp(CP, car_model)
+      scheduled = CarControllerParams(CP).STEER_DELTA_UP_LOOKUP is not None
+      assert scheduled == bool(CP_SP.safetyParam & HyundaiSafetyFlagsSP.CANFD_LOW_SPEED_RATE), car_model
+      assert scheduled == (car_model == CAR.HYUNDAI_IONIQ_5), car_model
+
   def test_can_features(self):
     for car_model in CAR:
       flags = car_model.config.flags

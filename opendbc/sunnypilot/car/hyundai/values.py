@@ -14,6 +14,7 @@ class HyundaiSafetyFlagsSP:
   LONG_MAIN_CRUISE_TOGGLEABLE = 2
   HAS_LDA_BUTTON = 4
   NON_SCC = 8
+  CANFD_LOW_SPEED_RATE = 16
 
 
 class HyundaiFlagsSP(IntFlag):

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import unittest
 import importlib
+import numpy as np
 from opendbc.testing import parameterized_class
 
 from opendbc.car import DT_CTRL
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.interfaces import get_torque_params
 from opendbc.car.lateral import ISO_LATERAL_ACCEL
@@ -65,6 +67,24 @@ class TestLateralLimits(unittest.TestCase):
     up_jerk, down_jerk = self.calculate_0_5s_jerk(self.control_params, self.torque_params)
     assert up_jerk <= MAX_LAT_JERK_UP + MAX_LAT_JERK_UP_TOLERANCE
     assert down_jerk <= MAX_LAT_JERK_DOWN
+
+  def test_scheduled_rate_jerk_limits(self):
+    """A speed scheduled rate up limit, checked per speed against the lateral accel that full torque was
+    measured to produce at that speed. Uses panda's side of the schedule (1 m/s speed fudge), the larger one."""
+    lookup = getattr(self.control_params, 'STEER_DELTA_UP_LOOKUP', None)
+    if lookup is None:
+      raise unittest.SkipTest('no rate schedule')
+
+    max_lat_accel_measured = self.torque_params['MAX_LAT_ACCEL_MEASURED']
+    la_bp, la_v = self.control_params.CANFD_LOW_SPEED_RATE_MAX_LAT_ACCEL
+    la_bp, la_v = [*la_bp, 55 * CV.MPH_TO_MS], [*la_v, max_lat_accel_measured]
+    steer_step = self.control_params.STEER_STEP
+    for v in np.arange(0., 40., 0.25):
+      rate = min(int(np.interp(v - 1., *lookup)), max(lookup[1]))
+      max_lat_accel = float(np.interp(v, la_bp, la_v))
+      steer_up_per_frame = rate / self.control_params.STEER_MAX / steer_step
+      up_jerk = min(steer_up_per_frame * JERK_MEAS_T / DT_CTRL, 1.0) * max_lat_accel / JERK_MEAS_T
+      assert up_jerk <= MAX_LAT_JERK_UP, f'{up_jerk:.2f} m/s^3 at {v:.2f} m/s (rate {rate})'
 
   def test_max_lateral_accel(self):
     assert self.torque_params["MAX_LAT_ACCEL_MEASURED"] <= ISO_LATERAL_ACCEL

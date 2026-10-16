@@ -85,6 +85,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     hud_control = CC.hudControl
 
     # steering torque
+    if self.params.STEER_DELTA_UP_LOOKUP is not None:
+      # floor, and panda evaluates the same lookup 1 m/s lower, so this never exceeds what panda allows
+      self.params.STEER_DELTA_UP = int(np.interp(CS.out.vEgoRaw, *self.params.STEER_DELTA_UP_LOOKUP))
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
     apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
 
