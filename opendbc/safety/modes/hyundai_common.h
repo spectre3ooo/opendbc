@@ -22,6 +22,7 @@ enum {
   HYUNDAI_PARAM_SP_LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE = 2,
   HYUNDAI_PARAM_SP_HAS_LDA_BUTTON = 4,
   HYUNDAI_PARAM_SP_NON_SCC = 8,
+  HYUNDAI_PARAM_SP_CANFD_LOW_SPEED_RATE = 16,
 };
 
 // common state
@@ -62,6 +63,10 @@ bool hyundai_has_lda_button = false;
 extern bool hyundai_non_scc;
 bool hyundai_non_scc = false;
 
+// CAN FD only: speed scheduled torque rate up limit, for platforms whose torque response was measured per speed
+extern bool hyundai_canfd_low_speed_rate;
+bool hyundai_canfd_low_speed_rate = false;
+
 static uint8_t hyundai_last_button_interaction;  // button messages since the user pressed an enable button
 
 static bool main_button_prev;
@@ -90,6 +95,7 @@ void hyundai_common_init(uint16_t param) {
   hyundai_longitudinal_main_cruise_toggleable = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_LONGITUDINAL_MAIN_CRUISE_TOGGLEABLE);
   hyundai_has_lda_button = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_HAS_LDA_BUTTON);
   hyundai_non_scc = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_NON_SCC);
+  hyundai_canfd_low_speed_rate = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_LOW_SPEED_RATE);
 
   hyundai_last_button_interaction = HYUNDAI_PREV_BUTTON_SAMPLES;
 

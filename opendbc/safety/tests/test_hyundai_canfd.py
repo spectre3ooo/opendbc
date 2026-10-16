@@ -2,7 +2,8 @@
 from opendbc.testing import parameterized_class
 import unittest
 
-from opendbc.car.hyundai.values import HyundaiSafetyFlags
+from opendbc.car.hyundai.values import CarControllerParams, HyundaiSafetyFlags
+from opendbc.sunnypilot.car.hyundai.values import HyundaiSafetyFlagsSP
 from opendbc.car.structs import CarParams
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
@@ -187,6 +188,59 @@ class TestHyundaiCanfdLKASteeringEV(TestHyundaiCanfdBase):
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
     self.safety.init_tests()
+
+
+class TestHyundaiCanfdLKASteeringEVLowSpeedRate(TestHyundaiCanfdLKASteeringEV):
+  """Ioniq 5: torque rate up scheduled on speed (HyundaiSafetyFlagsSP.CANFD_LOW_SPEED_RATE)"""
+
+  # taken from the car side, so these tests also prove panda's table matches what openpilot sends
+  MAX_RATE_UP_LOOKUP = CarControllerParams.CANFD_LOW_SPEED_RATE_LOOKUP
+  MAX_RATE_UP = max(MAX_RATE_UP_LOOKUP[1])
+  DYNAMIC_MAX_RATE_UP = True
+  MAX_RT_DELTA = 150
+
+  # the base _speed_msg takes raw wheel speed units (it only gates standstill); the schedule needs m/s
+  WHEEL_SPEED_KPH_PER_RAW = 0.03125
+
+  def setUp(self):
+    self.packer = CANPackerSafety("hyundai_canfd_generated")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.CANFD_LOW_SPEED_RATE)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
+    self.safety.init_tests()
+
+  def tearDown(self):
+    # the SP param is global state in libsafety; do not leak it into the next test class
+    self.safety.set_current_safety_param_sp(0)
+
+  def _raw_speed(self, speed):
+    return round(speed * 3.6 / self.WHEEL_SPEED_KPH_PER_RAW)
+
+  def _reset_speed_measurement(self, speed):
+    for _ in range(common.MAX_SAMPLE_VALS):
+      self._rx(self._speed_msg(self._raw_speed(speed)))
+
+  def _get_max_rate_up(self, speed):
+    # the wheel speed signal quantises the speed panda sees
+    return super()._get_max_rate_up(self._raw_speed(speed) * self.WHEEL_SPEED_KPH_PER_RAW / 3.6)
+
+  def test_rate_schedule_endpoints(self):
+    """Doubled rate at low speed, stock rate of 2 from 35 mph up, and the flag is what enables it"""
+    for speed, rate in ((0., 4), (5., 4), (9.9, 4), (16.6, 2), (30., 2)):
+      self._reset_speed_measurement(speed)
+      self.safety.set_controls_allowed(True)
+      self._set_prev_torque(0)
+      self.assertTrue(self._tx(self._torque_cmd_msg(rate)), speed)
+      self._set_prev_torque(0)
+      self.assertFalse(self._tx(self._torque_cmd_msg(rate + 1)), speed)
+
+    self.safety.set_current_safety_param_sp(0)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
+    self.safety.init_tests()
+    self._reset_speed_measurement(5.)
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(0)
+    self.assertFalse(self._tx(self._torque_cmd_msg(3)), "without the flag the stock rate of 2 applies at every speed")
 
 
 # TODO: Handle ICE and HEV configurations once we see cars that use the new messages
