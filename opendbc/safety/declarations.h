@@ -103,8 +103,18 @@ typedef struct {
   const bool dynamic_max_torque;  // use max_torque_lookup to apply torque limit based on speed
   const struct lookup_t max_torque_lookup;
 
-  const int max_rate_up;
+  const int max_rate_up;  // this upper limit is always enforced
   const int max_rate_down;
+
+  // Optional speed schedule for the rate up limit. max_rate_up above is always enforced as a
+  // ceiling, so a schedule can only ever tighten the limit, never loosen it. Safety modes that
+  // set this must call UPDATE_VEHICLE_SPEED(); with no speed sample the lowest speed point of
+  // the lookup is used, which is still bounded by max_rate_up.
+  // max_rate_down is deliberately not schedulable: it is a minimum required wind down rate, so
+  // reducing it loosens the check, and raising it above openpilot's rate causes false positives.
+  const bool dynamic_max_rate_up;  // use max_rate_up_lookup to apply the rate up limit based on speed
+  const struct lookup_t max_rate_up_lookup;
+
   const int max_rt_delta;  // max change in torque per 250ms interval (MAX_RT_INTERVAL)
 
   const SteeringControlType type;
