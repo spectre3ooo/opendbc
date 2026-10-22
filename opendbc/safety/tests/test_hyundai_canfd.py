@@ -9,6 +9,8 @@ from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
 from opendbc.safety.tests.hyundai_common import HyundaiButtonBase, HyundaiLongitudinalBase
+from opendbc.safety.tests.libsafety import libsafety_py
+from opendbc.sunnypilot.car.hyundai.values import HyundaiSafetyFlagsSP
 
 # All combinations of radar/camera-SCC and gas/hybrid/EV cars
 ALL_GAS_EV_HYBRID_COMBOS = [
@@ -241,6 +243,28 @@ class TestHyundaiCanfdLKASteeringEVLowSpeedRate(TestHyundaiCanfdLKASteeringEV):
     self.safety.set_controls_allowed(True)
     self._set_prev_torque(0)
     self.assertFalse(self._tx(self._torque_cmd_msg(3)), "without the flag the stock rate of 2 applies at every speed")
+class TestHyundaiCanfdLKASteeringLaneFeedEV(TestHyundaiCanfdLKASteeringEV):
+  # sunnypilot: the comma replaces the camera's lane geometry, so CAM_0x2A2/0x2A3 are blocked like CAM_0x2A4
+
+  TX_MSGS = [[0x50, 0], [0x1CF, 1], [0x2A4, 0], [0x2A2, 0], [0x2A3, 0]]
+  RELAY_MALFUNCTION_ADDRS = {0: (0x50, 0x2a4, 0x2a2, 0x2a3)}
+  FWD_BLACKLISTED_ADDRS = {2: [0x50, 0x2a4, 0x2a2, 0x2a3]}
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.CANFD_LANE_FEED)
+    super().setUp()
+
+  def tearDown(self):
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.DEFAULT)
+
+  def test_lane_feed_requires_flag(self):
+    # without the flag the camera's lane geometry is forwarded and the comma can't send its own
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.DEFAULT)
+    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    for addr in (0x2A2, 0x2A3):
+      self.assertEqual(0, self.safety.safety_fwd_hook(2, addr))
+      self.assertFalse(self._tx(common.make_msg(0, addr, 32)))
 
 
 # TODO: Handle ICE and HEV configurations once we see cars that use the new messages

@@ -47,6 +47,8 @@
 
 static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_lka_steer_msg_alt = false;
+// sunnypilot: the comma replaces the camera's lane geometry (CAM_0x2A2/0x2A3) on A-CAN
+static bool hyundai_canfd_lane_feed = false;
 
 static unsigned int hyundai_canfd_get_lka_addr(void) {
   return hyundai_canfd_lka_steer_msg_alt ? 0x110U : 0x50U;
@@ -260,6 +262,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     HYUNDAI_CANFD_LKA_STEER_MSG_COMMON_TX_MSGS(0, 1)
   };
 
+  // Same as above, plus the camera's lane geometry. The comma sends its own lane lines to the ADAS ECU
+  // and the camera's copies are blocked, like CAM_0x2A4. Opt-in: without it the ADAS ECU keeps the
+  // camera's geometry.
+  static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_LANE_FEED_TX_MSGS[] = {
+    HYUNDAI_CANFD_LKA_STEER_MSG_COMMON_TX_MSGS(0, 1)
+    {0x2A2, 0, 32, .check_relay = true},  // CAM_0x2A2
+    {0x2A3, 0, 32, .check_relay = true},  // CAM_0x2A3
+  };
+
   static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_ALT_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEER_MSG_ALT_COMMON_TX_MSGS(0, 1)
   };
@@ -304,6 +315,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_lka_steer_msg_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEER_MSG_ALT);
+  hyundai_canfd_lane_feed = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_LANE_FEED);
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -354,6 +366,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
       SET_RX_CHECKS(hyundai_canfd_lka_steer_msg_rx_checks, ret);
       if (hyundai_canfd_lka_steer_msg_alt) {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_ALT_TX_MSGS, ret);
+      } else if (hyundai_canfd_lane_feed) {
+        SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_LANE_FEED_TX_MSGS, ret);
       } else {
         SET_TX_MSGS(HYUNDAI_CANFD_LKA_STEER_MSG_TX_MSGS, ret);
       }

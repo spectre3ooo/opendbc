@@ -15,6 +15,7 @@ class HyundaiSafetyFlagsSP:
   HAS_LDA_BUTTON = 4
   NON_SCC = 8
   CANFD_LOW_SPEED_RATE = 16
+  CANFD_LANE_FEED = 32  # comma replaces CAM_0x2A2/0x2A3 lane geometry (LKA-steering, stock long only)
 
 
 class HyundaiFlagsSP(IntFlag):
