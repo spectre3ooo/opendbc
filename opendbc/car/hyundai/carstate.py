@@ -37,6 +37,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.main_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
     self.lda_button = 0
+    self.adrv_lfa = None  # last ADRV 0x12A seen, for the ADRV interceptor's warning fields
 
     self.gear_msg_canfd = "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
                           "GEAR_ALT" if CP.flags & HyundaiFlags.CANFD_ALT_GEARS else \
@@ -300,6 +301,11 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT
                                           else cp_cam.vl["CAM_0x2a4"])
 
+    # ADRV interceptor: latch the ADRV's own 0x12A (E-CAN) so the comma can carry its safety-warning
+    # fields when it takes over the message. Holds the last value while the red panda blocks it.
+    if self.CP_SP.flags & HyundaiFlagsSP.ADRV_INTERCEPTOR:
+      self.adrv_lfa = copy.copy(cp.vl["LFA"])
+
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
@@ -323,6 +329,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
         # this message is 50Hz but the ECU frequently stops transmitting for ~0.5s
         ("CRUISE_BUTTONS", 1)
       ]
+    if self.CP_SP.flags & HyundaiFlagsSP.ADRV_INTERCEPTOR:
+      msgs += [("LFA", 100)]  # the ADRV's own 0x12A, to carry its warning fields when the comma takes over
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),

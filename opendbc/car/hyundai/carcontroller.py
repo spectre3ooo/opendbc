@@ -8,6 +8,8 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
 from opendbc.car.interfaces import CarControllerBase
 
+from opendbc.sunnypilot.car.hyundai import adrv_interceptor
+from opendbc.sunnypilot.car.hyundai.adrv_interceptor import AdrvInterceptor
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
 from opendbc.sunnypilot.car.hyundai.icbm import IntelligentCruiseButtonManagementInterface
 from opendbc.sunnypilot.car.hyundai.longitudinal.controller import LongitudinalController
@@ -63,6 +65,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     LeadDataCarController.__init__(self, CP)
     LongitudinalController.__init__(self, CP, CP_SP)
     IntelligentCruiseButtonManagementInterface.__init__(self, CP, CP_SP)
+    self.adrv_interceptor = AdrvInterceptor(CP, CP_SP)
     self.CAN = CanBus(CP)
     self.params = CarControllerParams(CP)
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -76,6 +79,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
+    self.adrv_interceptor.update(getattr(CS, "adrv_lfa", None))
     LeadDataCarController.update(self, CC_SP)
     MadsCarController.update(self, self.CP, CC, CC_SP, self.frame)
     if self.frame % 5 == 0:
@@ -204,16 +208,29 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
+    interceptor = self.adrv_interceptor.enabled
+
     # steering control
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon))
 
-    # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
-    if self.frame % 5 == 0 and lka_steering:
+    if interceptor:
+      # the comma takes over the ADRV's 0x12A on E-CAN (the red panda blocks the ADRV's copy):
+      # the comma drives the rack (removing the 2-frame drop/re-ramp), paints the cluster lanes
+      # from its own model, and carries the ADRV's last-seen safety-warning fields.
+      can_sends.append(adrv_interceptor.create_lfa(self.packer, self.CAN, apply_steer_req, apply_torque,
+                                                   self.lkas_icon, hud_control, self.adrv_interceptor.adrv_lfa))
+
+    # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU.
+    # under the interceptor we instead feed the ADRV the real camera lanes (the red panda blocks its
+    # steering output), so it can draw a correct cluster and pick the right in-path SCC target.
+    if self.frame % 5 == 0 and lka_steering and not interceptor:
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT))
 
     # LFA and HDA icons
-    if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
+    if self.frame % 5 == 0 and interceptor:
+      can_sends.append(adrv_interceptor.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
+    elif self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
       can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 
     # blinkers
