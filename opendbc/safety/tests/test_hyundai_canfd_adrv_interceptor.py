@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import random
 import unittest
 
 from opendbc.safety.tests.libsafety import libsafety_py
@@ -11,6 +12,10 @@ TIMEOUT_US = 150000
 INTERCEPTED = (0x1A0, 0x12A, 0x1E0)
 # a sample of traffic that must always pass untouched, both ways
 PASSTHROUGH = (0xA0, 0xEA, 0x161, 0x9A0, 0x7D0, 0x50)
+# The ADRV's forward-collision / AEB path. ADRV_0x160 was the only message that changed during a
+# logged FCA event (0x1A0 aReqValue stayed 0; logs/fca_scan/FINDINGS.md). It must reach the car
+# whatever the comma is doing, so AEB keeps working while the comma drives longitudinal.
+AEB_PATH = (0x160,)
 
 
 class TestHyundaiCanfdAdrvInterceptor(unittest.TestCase):
@@ -107,6 +112,59 @@ class TestHyundaiCanfdAdrvInterceptor(unittest.TestCase):
     self.assertEqual(0, self.safety.set_safety_hooks(SAFETY_HYUNDAI_CANFD_ADRV_INTERCEPTOR, 0))
     for addr in INTERCEPTED:
       self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+
+  def test_aeb_path_not_intercepted(self):
+    self.assertFalse(set(AEB_PATH) & set(INTERCEPTED))
+
+  def test_aeb_path_passes_while_comma_drives(self):
+    # comma replacing SCC (op long), steering and cluster at their real rates; the ADRV's AEB
+    # message at 50 Hz must reach the car every single frame
+    # Includes a car-side 0x160 (e.g. a comma that still sends openpilot-long's fake ADRV_0x160):
+    # even then the ADRV's real one must not be blocked.
+    for frame in range(1000):  # 10 s at 100 Hz
+      self._op(0x12A)
+      if frame % 2 == 0:
+        self._op(0x1A0)
+        self._op(0x1E0)
+        for addr in AEB_PATH:
+          self._fwd(CAR_BUS, addr)
+        for addr in AEB_PATH:
+          self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr), f"{frame=} {addr=:#x}")
+        self.assertEqual(-1, self._fwd(ADRV_BUS, 0x1A0))  # SCC really is being replaced
+      self._advance(10000)
+
+  def test_aeb_path_passes_through_timeouts(self):
+    # comma active, then gone, then back: the AEB path never blocks at any point
+    for addr in INTERCEPTED:
+      self._op(addr)
+    for _ in range(40):
+      for addr in AEB_PATH:
+        self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+      self._advance(10000)  # crosses the 150 ms timeout partway through
+    for addr in INTERCEPTED:
+      self._op(addr)
+    for addr in AEB_PATH:
+      self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+
+  def test_aeb_path_random_traffic(self):
+    # fuzz: random comma activity, random timing, random interleaving with other traffic
+    rng = random.Random(0x160)
+    for _ in range(20000):
+      r = rng.random()
+      if r < 0.4:
+        self._op(rng.choice(INTERCEPTED))
+      elif r < 0.6:
+        self._fwd(rng.choice((CAR_BUS, ADRV_BUS, TAP_BUS)), rng.choice((*INTERCEPTED, *PASSTHROUGH, *AEB_PATH)))
+      else:
+        for addr in AEB_PATH:
+          self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+      self._advance(rng.choice((0, 1, 500, 10000, 20000, 149999, 150001, 400000)))
+
+  def test_aeb_path_car_side_to_adrv(self):
+    # a car-side copy (e.g. an openpilot-long fake 0x160) isn't intercepted either; the comma must
+    # simply not send one in interceptor mode
+    for addr in AEB_PATH:
+      self.assertEqual(ADRV_BUS, self._fwd(CAR_BUS, addr))
 
   def test_no_tx_allowed(self):
     for bus in range(3):
