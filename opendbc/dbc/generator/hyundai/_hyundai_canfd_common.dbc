@@ -174,10 +174,26 @@ BO_ 576 RADAR_0x240: 16 FRONT_RADAR
 BO_ 674 CAM_0x2a2: 32 CAMERA
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
  SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ LEFT_POSITION : 24|16@1+ (0.01,-10) [-10|645.35] "m" XXX
+ SG_ RIGHT_POSITION : 40|16@1+ (0.01,-10) [-10|645.35] "m" XXX
+ SG_ LEFT_HEADING : 64|16@1+ (0.000976563,-0.356445) [-0.356445|63.643] "rad" XXX
+ SG_ RIGHT_HEADING : 96|16@1+ (0.000976563,-0.356445) [-0.356445|63.643] "rad" XXX
+ SG_ LEFT_CURVATURE : 128|16@1+ (2e-06,-0.065506) [-0.065506|0.065564] "1/m" XXX
+ SG_ RIGHT_CURVATURE : 160|16@1+ (2e-06,-0.065506) [-0.065506|0.065564] "1/m" XXX
+ SG_ LEFT_CURVATURE_RATE : 192|16@1+ (2e-08,-0.00065422) [-0.00065422|0.00065648] "1/m^2" XXX
+ SG_ RIGHT_CURVATURE_RATE : 224|16@1+ (2e-08,-0.00065422) [-0.00065422|0.00065648] "1/m^2" XXX
 
 BO_ 675 CAM_0x2a3: 32 CAMERA
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
  SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ ADJ_LEFT_POSITION : 24|16@1+ (0.01,-10) [-10|645.35] "m" XXX
+ SG_ ADJ_RIGHT_POSITION : 40|16@1+ (0.01,-10) [-10|645.35] "m" XXX
+ SG_ ADJ_LEFT_HEADING : 64|16@1+ (0.000976563,-0.356445) [-0.356445|63.643] "rad" XXX
+ SG_ ADJ_RIGHT_HEADING : 96|16@1+ (0.000976563,-0.356445) [-0.356445|63.643] "rad" XXX
+ SG_ ADJ_LEFT_CURVATURE : 128|16@1+ (2e-06,-0.065506) [-0.065506|0.065564] "1/m" XXX
+ SG_ ADJ_RIGHT_CURVATURE : 160|16@1+ (2e-06,-0.065506) [-0.065506|0.065564] "1/m" XXX
+ SG_ ADJ_LEFT_CURVATURE_RATE : 192|16@1+ (2e-08,-0.00065422) [-0.00065422|0.00065648] "1/m^2" XXX
+ SG_ ADJ_RIGHT_CURVATURE_RATE : 224|16@1+ (2e-08,-0.00065422) [-0.00065422|0.00065648] "1/m^2" XXX
 
 BO_ 676 CAM_0x2a4: 24 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
@@ -230,6 +246,8 @@ CM_ SG_ 80 ToiFltSta "This fault flag is set when a fault in the LKA system has 
 CM_ SG_ 80 LKA_SysWrn "A signal that provides additional information on the operation of the LKA system for the HMI to display to the driver. This includes additional fault information, reasons for unavailability of the system and additional warnings like the hands-off warning";
 CM_ SG_ 80 LKA_UsmMod "This signal indicates LKA USM Mode";
 CM_ SG_ 80 Info_PedtrnDst "Distance of the nearest pedestrian";
+CM_ BO_ 674 "Camera lane geometry, ego lane lines (left/right). Reverse-engineered from logs against FR_CMR_03_50ms and modelV2. Each field reads its no-line default as zero. Position scale/offset confirmed; heading, curvature and curvature-rate scales are provisional (+-10%).";
+CM_ BO_ 675 "Camera lane geometry, adjacent (outer) lane lines, same encoding as 674. ADJ_*_POSITION raw 0 (-10 m) when absent.";
 CM_ BO_ 676 "Contains signals with detailed lane line information. Used by ADAS ECU on HDA 2 vehicles to operate LFA.";
 CM_ SG_ 676 LEFT_LANE_LINE "Left lane line confidence";
 CM_ SG_ 676 RIGHT_LANE_LINE "Right lane line confidence";
