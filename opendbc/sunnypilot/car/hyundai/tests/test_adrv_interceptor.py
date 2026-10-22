@@ -64,14 +64,14 @@ class TestAdrvInterceptor(unittest.TestCase):
   def test_lfa_cluster_lanes_follow_model(self):
     both = self._parse("LFA", ai.create_lfa(self.packer, self.CAN, True, 0, 1, FakeHud(True, True)),
                        ["LKA_LHLnWrnSta", "LKA_RHLnWrnSta", "LKA_RcgSta"])
-    self.assertEqual(both["LKA_LHLnWrnSta"], ai.LANE_SHOWN)
-    self.assertEqual(both["LKA_RHLnWrnSta"], ai.LANE_SHOWN)
+    self.assertEqual(both["LKA_LHLnWrnSta"], ai.LANE_NO_WARNING)
+    self.assertEqual(both["LKA_RHLnWrnSta"], ai.LANE_NO_WARNING)
     self.assertEqual(both["LKA_RcgSta"], ai.RCG_TRACKING)
 
     none = self._parse("LFA", ai.create_lfa(self.packer, self.CAN, True, 0, 1, FakeHud(False, False)),
                        ["LKA_LHLnWrnSta", "LKA_RHLnWrnSta", "LKA_RcgSta"])
-    self.assertEqual(none["LKA_LHLnWrnSta"], ai.LANE_OFF)
-    self.assertEqual(none["LKA_RHLnWrnSta"], ai.LANE_OFF)
+    self.assertEqual(none["LKA_LHLnWrnSta"], ai.LANE_NO_WARNING)
+    self.assertEqual(none["LKA_RHLnWrnSta"], ai.LANE_NO_WARNING)
     self.assertEqual(none["LKA_RcgSta"], ai.RCG_OFF)
 
   def test_lfa_preserves_adrv_warnings(self):

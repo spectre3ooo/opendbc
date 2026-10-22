@@ -49,25 +49,20 @@ ADRV_WARNING_FIELDS = (
   "LKA_OnOffEquip2Sta",  # LKA equipment status
 )
 
-# Cluster lane-display enum values on 0x12A. PROVISIONAL — these must be validated against a
-# stock-ADRV 0x12A capture taken with real lane confidence (dashcam mode / interceptor lane
-# feed). The suppression path zeroes the camera lanes, so every existing log shows these
-# flatlined at 0 and cannot confirm the "lanes shown" values. Tunable here once captured.
-LANE_OFF = 0
-LANE_SHOWN = 2        # a lane line drawn on the cluster
+# Cluster lane fields on 0x12A, from a stock-ADRV capture with real camera lanes (route 0000004c,
+# 2026-10-22, comma passive). While stock LFA tracked the lanes, LKA_RcgSta was 3; it dropped to 0
+# while crossing a line on a lane change. LKA_LHLnWrnSta/LKA_RHLnWrnSta stayed 0 the whole drive:
+# they are lane-departure warnings, not "lane shown", so the comma leaves them at 0.
 RCG_OFF = 0
-RCG_TRACKING = 2      # lanes recognized (HDA actively tracking)
+RCG_TRACKING = 3      # lanes recognized, LFA tracking
+LANE_NO_WARNING = 0
 
 
 def cluster_lane_display(hud_control):
-  """Cluster lane/recognition fields for 0x12A, driven by the comma's model.
-
-  Replaces the flatlined-at-0 fields the stock path produces under lane suppression, so the
-  cluster can draw the lanes the comma actually sees. Enum values are PROVISIONAL (see above).
-  """
+  """Cluster lane/recognition fields for 0x12A, driven by the comma's model."""
   return {
-    "LKA_LHLnWrnSta": LANE_SHOWN if hud_control.leftLaneVisible else LANE_OFF,
-    "LKA_RHLnWrnSta": LANE_SHOWN if hud_control.rightLaneVisible else LANE_OFF,
+    "LKA_LHLnWrnSta": LANE_NO_WARNING,
+    "LKA_RHLnWrnSta": LANE_NO_WARNING,
     "LKA_RcgSta": RCG_TRACKING if (hud_control.leftLaneVisible or hud_control.rightLaneVisible) else RCG_OFF,
     "LKA_SysWrn": 0,
   }
