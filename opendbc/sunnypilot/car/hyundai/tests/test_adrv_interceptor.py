@@ -5,7 +5,7 @@ from opendbc.can import CANPacker, CANParser
 from opendbc.car import structs
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags
-from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyFlagsSP
 from opendbc.sunnypilot.car.hyundai import adrv_interceptor as ai
 
 DBC = "hyundai_canfd_generated"
@@ -172,6 +172,86 @@ class TestAdrvInterceptorIntegration(unittest.TestCase):
     pt = cs.get_can_parsers(CP, CP_SP)[Bus.pt]
     self.assertIsNotNone(pt.vl["LFA"])  # LFA registered on the E-CAN parser
 
+
+class TestAdrvInterceptorLong(unittest.TestCase):
+  """op long through the interceptor keeps the ADRV alive (AEB): no knockout, no fakes, no duplicates."""
+  FP = "HYUNDAI_IONIQ_5"
+  ADRV_FAKES = (0x51, 0x160, 0x1EA, 0x200, 0x345, 0x1DA)
+
+  def _build(self, interceptor_long, op_long=True):
+    from opendbc.car.hyundai.values import DBC
+    from opendbc.car.hyundai.interface import CarInterface
+    from opendbc.car.hyundai.carcontroller import CarController
+    CP = CarInterface.get_non_essential_params(self.FP)
+    # the gen5w Ioniq 5 (HDA2): ADRV-routed SCC, standard buttons (non-essential params are generic)
+    CP.flags |= HyundaiFlags.CANFD_LKA_STEER_MSG.value
+    CP.flags &= ~(HyundaiFlags.CANFD_CAMERA_SCC.value | HyundaiFlags.CANFD_ALT_BUTTONS.value)
+    CP.openpilotLongitudinalControl = op_long
+    CP_SP = structs.CarParamsSP()
+    enabled = ai.enable_interceptor_long(CP, CP_SP) if interceptor_long else False
+    return CarController(DBC[self.FP], CP, CP_SP), CP, CP_SP, enabled
+
+  def _emit(self, cc, frames=200):
+    from opendbc.car import structs as s
+    CC = s.CarControl()
+    CC.enabled = True
+    CC.latActive = True
+    CC_SP = s.CarControlSP()
+
+    class Shim:
+      out = s.CarState()
+      is_metric = True
+      adrv_lfa = None
+      main_cruise_enabled = True
+      cruise_info: dict = {}
+      buttons_counter = 0
+      lfa_block_msg = {**{f"BYTE{i}": 0 for i in range(3, 24) if i != 7}, "COUNTER": 0}
+      cruise_buttons = [0]
+      main_buttons = [0]
+      escc_aeb_warning = escc_aeb_dec_cmd_act = escc_cmd_act = escc_aeb_dec_cmd = 0
+
+    addrs = set()
+    for f in range(frames):
+      cc.frame = f
+      _, sends = cc.update(CC.as_reader(), CC_SP, Shim(), f * 10_000_000)
+      addrs |= {(addr, bus) for addr, _dat, bus in sends}
+    return addrs
+
+  def test_enable_requires_lka_steering_op_long(self):
+    _, CP, CP_SP, enabled = self._build(interceptor_long=True)
+    self.assertTrue(enabled)
+    self.assertTrue(CP_SP.flags & HyundaiFlagsSP.ADRV_INTERCEPTOR_LONG)
+    self.assertTrue(CP_SP.safetyParam & HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG)
+    _, CP, CP_SP, enabled = self._build(interceptor_long=True, op_long=False)
+    self.assertFalse(enabled)
+    self.assertFalse(CP_SP.safetyParam & HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG)
+
+  def test_interceptor_long_emission(self):
+    cc, _, _, _ = self._build(interceptor_long=True)
+    addrs = self._emit(cc)
+    ecan, acan = cc.CAN.ECAN, cc.CAN.ACAN
+    self.assertIn((0x1A0, ecan), addrs)     # our SCC_CONTROL (the red panda blocks the ADRV's)
+    self.assertIn((0x50, acan), addrs)      # steering on LKAS, relayed by the live ADRV
+    sent = {a for a, _ in addrs}
+    self.assertNotIn(0x730, sent)           # never knock out the ADRV (AEB)
+    for addr in self.ADRV_FAKES:            # never fake the ADRV, 0x160 is its AEB path
+      self.assertNotIn(addr, sent, f"{addr=:#x}")
+    self.assertNotIn(0x12A, sent)           # the ADRV still sends LFA/cluster itself
+    self.assertNotIn(0x1E0, sent)
+
+  def test_stock_op_long_unchanged(self):
+    cc, _, _, _ = self._build(interceptor_long=False)
+    sent = {a for a, _ in self._emit(cc)}
+    for addr in (0x730, 0x160, 0x12A, 0x1E0, 0x1A0):
+      self.assertIn(addr, sent, f"{addr=:#x}")
+
+  def test_init_does_not_disable_adrv(self):
+    from opendbc.car.hyundai.interface import CarInterface
+    for interceptor_long, expect_disable in ((True, False), (False, True)):
+      _, CP, CP_SP, _ = self._build(interceptor_long=interceptor_long)
+      sent = []
+      CarInterface.init(CP, CP_SP, lambda *a, **k: [], lambda msgs: sent.extend(msgs))
+      self.assertEqual(expect_disable, any(m.address == 0x730 for m in sent), f"{interceptor_long=}")
 
 if __name__ == "__main__":
   unittest.main()

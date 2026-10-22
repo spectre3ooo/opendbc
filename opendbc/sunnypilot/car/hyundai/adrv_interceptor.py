@@ -30,7 +30,8 @@ before relying on the interceptor for 0x12A. If they are 0x12A-only, the red pan
 re-address rather than block (a firmware change, not yet in mainline).
 """
 from opendbc.car import structs
-from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
+from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyFlagsSP
 
 LFA_MSG = 0x12A
 LFAHDA_CLUSTER_MSG = 0x1E0
@@ -119,3 +120,29 @@ class AdrvInterceptor:
     """Latch the ADRV's own 0x12A while it is still visible (before/between comma frames)."""
     if adrv_lfa is not None:
       self.adrv_lfa = adrv_lfa
+
+
+# *** longitudinal through the interceptor ***
+# Stock openpilot long on LKA-steering cars knocks the ADAS Driving ECU out (0x730) and fakes its
+# messages, which also removes AEB/FCA. Through the interceptor the ADRV stays alive: the red panda
+# blocks only its SCC_CONTROL while the comma's is fresh. So the comma must not send the knockout,
+# the ADRV fakes (0x160 is the ADRV's AEB path) or its own 0x12A/0x1E0 (the ADRV still sends those,
+# relaying the comma's LKAS steering as with stock longitudinal).
+
+def interceptor_long_eligible(CP: structs.CarParams) -> bool:
+  return bool(CP.flags & HyundaiFlags.CANFD and CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG and
+              not CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT and CP.openpilotLongitudinalControl)
+
+
+def enable_interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> bool:
+  """Opt in (from the sunnypilot side, before controls start). Returns whether it took effect."""
+  if not interceptor_long_eligible(CP):
+    return False
+  CP_SP.flags |= HyundaiFlagsSP.ADRV_INTERCEPTOR_LONG.value
+  CP_SP.safetyParam |= HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG
+  return True
+
+
+def interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> bool:
+  # getattr: CarInterface.deinit calls init without CP_SP
+  return interceptor_long_eligible(CP) and bool(getattr(CP_SP, "flags", 0) & HyundaiFlagsSP.ADRV_INTERCEPTOR_LONG)

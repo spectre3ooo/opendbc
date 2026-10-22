@@ -217,6 +217,12 @@ bool safety_rx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // sunnypilot: modes that watch for frames outside their rx checks (e.g. a stock ECU an interceptor
+  // should be silencing)
+  if (current_hooks->rx_all != NULL) {
+    current_hooks->rx_all(msg);
+  }
+
   // reset mismatches on rising edge of controls_allowed to avoid rare race condition
   if (controls_allowed && !controls_allowed_prev) {
     heartbeat_engaged_mismatches = 0;

@@ -16,6 +16,7 @@ class HyundaiSafetyFlagsSP:
   NON_SCC = 8
   CANFD_LOW_SPEED_RATE = 16
   CANFD_LANE_FEED = 32  # comma replaces CAM_0x2A2/0x2A3 lane geometry (LKA-steering, stock long only)
+  CANFD_ADRV_INTERCEPTOR_LONG = 64  # op long through the red-panda ADRV interceptor (ADRV kept alive for AEB)
 
 
 class HyundaiFlagsSP(IntFlag):
@@ -34,3 +35,4 @@ class HyundaiFlagsSP(IntFlag):
   SPEED_LIMIT_AVAILABLE = 2 ** 9  # platforms with speed limit data available
   HAS_LKAS12 = 2 ** 10
   ADRV_INTERCEPTOR = 2 ** 11  # comma takes over the ADRV's 0x12A/0x1E0 via the red-panda interceptor
+  ADRV_INTERCEPTOR_LONG = 2 ** 12  # op long via the red-panda interceptor: ADRV kept alive (AEB), only its 0x1A0 replaced

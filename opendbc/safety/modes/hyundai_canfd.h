@@ -50,6 +50,36 @@ static bool hyundai_canfd_lka_steer_msg_alt = false;
 // sunnypilot: the comma replaces the camera's lane geometry (CAM_0x2A2/0x2A3) on A-CAN
 static bool hyundai_canfd_lane_feed = false;
 
+// sunnypilot: longitudinal through the red-panda ADRV interceptor (LKA-steering cars). The ADAS
+// Driving ECU stays alive, so its AEB/FCA keep working; the red panda blocks only its SCC_CONTROL
+// while ours is fresh. We never disable the ADRV (no 0x730) and never fake its messages (0x160 is
+// its AEB path). Steering stays on LKAS, relayed by the ADRV as with stock longitudinal.
+// Watchdog: if the ADRV's SCC_CONTROL still reaches E-CAN while we're sending ours, the red panda
+// isn't blocking, and the car would see two SCC sources. Then we stop sending SCC_CONTROL for the
+// rest of the drive, and the car falls back to the ADRV alone.
+#define HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US 150000U  // the red panda's own freshness timeout
+#define HYUNDAI_CANFD_ADRV_SCC_GRACE_US 100000U    // handover: the red panda blocks from the ADRV's next frame
+static bool hyundai_canfd_adrv_interceptor_long = false;
+static bool hyundai_canfd_adrv_scc_fault = false;
+static bool hyundai_canfd_scc_tx_seen = false;
+static uint32_t hyundai_canfd_scc_tx_last = 0U;
+static uint32_t hyundai_canfd_scc_tx_start = 0U;
+
+static bool hyundai_canfd_scc_tx_active(uint32_t ts) {
+  return hyundai_canfd_scc_tx_seen && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_last) <= HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US);
+}
+
+static void hyundai_canfd_rx_all_hook(const CANPacket_t *msg) {
+  // our own SCC_CONTROL never comes back through here, so any 0x1A0 on E-CAN is the ADRV's
+  if (hyundai_canfd_adrv_interceptor_long && (msg->addr == 0x1a0U) && (msg->bus == 1U)) {
+    const uint32_t ts = microsecond_timer_get();
+    if (hyundai_canfd_scc_tx_active(ts) && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_start) > HYUNDAI_CANFD_ADRV_SCC_GRACE_US)) {
+      hyundai_canfd_adrv_scc_fault = true;
+      controls_allowed = false;
+    }
+  }
+}
+
 static unsigned int hyundai_canfd_get_lka_addr(void) {
   return hyundai_canfd_lka_steer_msg_alt ? 0x110U : 0x50U;
 }
@@ -188,7 +218,9 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
   bool tx = true;
 
   // steering
-  const unsigned int steer_addr = (hyundai_canfd_lka_steer_msg && !hyundai_longitudinal) ? hyundai_canfd_get_lka_addr() : 0x12aU;
+  // with the interceptor the ADRV is alive and relays our LKAS, so that's what steers
+  const bool steer_via_lkas = hyundai_canfd_lka_steer_msg && (!hyundai_longitudinal || hyundai_canfd_adrv_interceptor_long);
+  const unsigned int steer_addr = steer_via_lkas ? hyundai_canfd_get_lka_addr() : 0x12aU;
   if (msg->addr == steer_addr) {
     int desired_torque = (((msg->data[6] & 0xFU) << 7U) | (msg->data[5] >> 1U)) - 1024U;
     bool steer_req = GET_BIT(msg, 52U);
@@ -243,8 +275,21 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
       }
     }
 
+    if (hyundai_canfd_adrv_interceptor_long && hyundai_canfd_adrv_scc_fault) {
+      violation = true;
+    }
+
     if (violation) {
       tx = false;
+    }
+
+    if (tx && hyundai_canfd_adrv_interceptor_long) {
+      const uint32_t ts = microsecond_timer_get();
+      if (!hyundai_canfd_scc_tx_active(ts)) {
+        hyundai_canfd_scc_tx_start = ts;  // a new stretch of ours: the red panda needs a moment to take over
+      }
+      hyundai_canfd_scc_tx_last = ts;
+      hyundai_canfd_scc_tx_seen = true;
     }
 
     acc_main_on_tx = GET_BIT(msg, 66U);
@@ -288,6 +333,14 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     {0x1DA, 1, 32, .check_relay = false},  // ADRV_0x1da
   };
 
+  // ADRV interceptor longitudinal: steering on LKAS (relayed by the ADRV) + our SCC_CONTROL on E-CAN.
+  // No 0x730 and no ADRV fakes. SCC_CONTROL can't use check_relay: the ADRV's copy is legitimately on
+  // E-CAN until the red panda sees ours (the rx_all watchdog covers it instead).
+  static const CanMsg HYUNDAI_CANFD_LKA_STEER_MSG_ADRV_INTERCEPTOR_LONG_TX_MSGS[] = {
+    HYUNDAI_CANFD_LKA_STEER_MSG_COMMON_TX_MSGS(0, 1)
+    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(1, false)
+  };
+
   static const CanMsg HYUNDAI_CANFD_LFA_STEERING_TX_MSGS[] = {
     HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
     HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
@@ -316,6 +369,12 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_lka_steer_msg_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEER_MSG_ALT);
   hyundai_canfd_lane_feed = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_LANE_FEED);
+  hyundai_canfd_adrv_interceptor_long = hyundai_longitudinal && hyundai_canfd_lka_steer_msg && !hyundai_canfd_lka_steer_msg_alt &&
+                                        GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_ADRV_INTERCEPTOR_LONG);
+  hyundai_canfd_adrv_scc_fault = false;
+  hyundai_canfd_scc_tx_seen = false;
+  hyundai_canfd_scc_tx_last = 0U;
+  hyundai_canfd_scc_tx_start = 0U;
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -324,8 +383,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_STD_BUTTONS_RX_CHECKS(1)
       };
 
-      ret = BUILD_SAFETY_CFG(hyundai_canfd_lka_steer_msg_long_rx_checks, HYUNDAI_CANFD_LKA_STEER_MSG_LONG_TX_MSGS);
-
+      if (hyundai_canfd_adrv_interceptor_long) {
+        ret = BUILD_SAFETY_CFG(hyundai_canfd_lka_steer_msg_long_rx_checks, HYUNDAI_CANFD_LKA_STEER_MSG_ADRV_INTERCEPTOR_LONG_TX_MSGS);
+      } else {
+        ret = BUILD_SAFETY_CFG(hyundai_canfd_lka_steer_msg_long_rx_checks, HYUNDAI_CANFD_LKA_STEER_MSG_LONG_TX_MSGS);
+      }
     } else {
       // Longitudinal checks for LFA steering
       static RxCheck hyundai_canfd_long_rx_checks[] = {
@@ -430,4 +492,5 @@ const safety_hooks hyundai_canfd_hooks = {
   .get_counter = hyundai_canfd_get_counter,
   .get_checksum = hyundai_canfd_get_checksum,
   .compute_checksum = hyundai_common_canfd_compute_checksum,
+  .rx_all = hyundai_canfd_rx_all_hook,
 };

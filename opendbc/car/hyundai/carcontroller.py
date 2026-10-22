@@ -115,8 +115,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
+    # not with the ADRV interceptor: the ADRV must stay alive for AEB
     if self.frame % 100 == 0 and not ((self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC) or self.ESCC.enabled) and \
-            self.CP.openpilotLongitudinalControl:
+            self.CP.openpilotLongitudinalControl and not adrv_interceptor.interceptor_long(self.CP, self.CP_SP):
       # for longitudinal control, either radar or ADAS driving ECU
       addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
       if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value:
@@ -206,12 +207,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     can_sends = []
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG
-    lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
+    adrv_long = adrv_interceptor.interceptor_long(self.CP, self.CP_SP)
+    lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl and not adrv_long
 
     interceptor = self.adrv_interceptor.enabled
 
     # steering control
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon))
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.lkas_icon,
+                                                             adrv_alive=adrv_long))
 
     if interceptor:
       # the comma takes over the ADRV's 0x12A on E-CAN (the red panda blocks the ADRV's copy):
@@ -238,7 +241,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
     if self.CP.openpilotLongitudinalControl:
-      if lka_steering:
+      if adrv_long:
+        pass  # the live ADRV sends its own 0x160 (its AEB path) and the rest; fake nothing
+      elif lka_steering:
         can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
       else:
         can_sends.extend(hyundaicanfd.create_fca_warning_light(self.packer, self.CAN, self.frame))

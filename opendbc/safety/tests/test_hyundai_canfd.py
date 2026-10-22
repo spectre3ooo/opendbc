@@ -318,6 +318,108 @@ class TestHyundaiCanfdLKASteeringLongEV(HyundaiLongitudinalBase, TestHyundaiCanf
   def _tx_acc_state_msg(self, enable):
     values = {"MainMode_ACC": enable}
     return self.packer.make_can_msg_safety("SCC_CONTROL", self.PT_BUS, values)
+class TestHyundaiCanfdLKASteeringLongAdrvInterceptorEV(TestHyundaiCanfdLKASteeringLongEV):
+  """sunnypilot: op long through the red-panda ADRV interceptor. The ADRV stays alive for AEB/FCA: no
+  0x730 knockout and no ADRV fakes (0x160 is its AEB path). Steering stays on LKAS, relayed by the ADRV."""
+
+  TX_MSGS = [[0x50, 0], [0x1CF, 1], [0x2A4, 0], [0x1a0, 1]]
+  RELAY_MALFUNCTION_ADDRS = {0: (0x50, 0x2a4)}  # the ADRV's 0x1A0 is legitimately on E-CAN
+  FWD_BLACKLISTED_ADDRS = {2: [0x50, 0x2a4]}
+
+  STEER_MSG = "LKAS"
+  STEER_BUS = 0
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG)
+    super().setUp()
+    self.t = 0
+    self.safety.set_timer(self.t)
+
+  def tearDown(self):
+    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.DEFAULT)
+
+  def _advance(self, us):
+    self.t += us
+    self.safety.set_timer(self.t)
+
+  def _adrv_scc(self):
+    return self._rx(common.make_msg(1, 0x1a0, 32))
+
+  def _send_scc(self):
+    return self._tx(self._accel_msg(0))
+
+  def test_tester_present_allowed(self, ecu_disable: bool = False):
+    # the ADRV must not be knocked out: it provides AEB
+    super().test_tester_present_allowed(ecu_disable=False)
+
+  def test_no_adrv_fakes(self):
+    for addr in (0x730, 0x160, 0x51, 0x1ea, 0x200, 0x345, 0x1da, 0x12a, 0x1e0):
+      self.assertFalse(self._tx(common.make_msg(1, addr, 32)), f"{addr=:#x}")
+      self.assertFalse(self._tx(common.make_msg(0, addr, 32)), f"{addr=:#x}")
+
+  def test_disabled_ecu_alive(self):
+    # the ADRV being alive is the point: its SCC_CONTROL alone is not a relay malfunction
+    self._adrv_scc()
+    self.assertFalse(self.safety.get_relay_malfunction())
+    self.assertTrue(self._send_scc())
+
+  def test_watchdog_ignores_adrv_scc_before_we_send(self):
+    for _ in range(50):
+      self._adrv_scc()
+      self._advance(20000)
+    self.assertTrue(self._send_scc())
+
+  def test_watchdog_handover_grace(self):
+    # the red panda blocks from the ADRV's next frame: one ADRV frame right after we start is fine
+    self.assertTrue(self._send_scc())
+    self._advance(20000)
+    self._adrv_scc()
+    self._advance(20000)
+    self.assertTrue(self._send_scc())
+
+  def test_watchdog_trips_when_interceptor_not_blocking(self):
+    self.safety.set_controls_allowed(True)
+    for _ in range(10):  # 200 ms of ours at 50 Hz
+      self.assertTrue(self._send_scc())
+      self._advance(20000)
+    self._adrv_scc()  # the ADRV's still reaches E-CAN: two SCC sources
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self._send_scc())
+    # latched for the drive
+    self._advance(10_000_000)
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._send_scc())
+    # steering is unaffected
+    self.assertTrue(self._tx(self._torque_cmd_msg(0, steer_req=0)))
+
+  def test_watchdog_allows_fallback_after_we_stop(self):
+    for _ in range(10):
+      self.assertTrue(self._send_scc())
+      self._advance(20000)
+    self._advance(150001)  # we stopped: the red panda times out and passes the ADRV's again
+    for _ in range(10):
+      self._adrv_scc()
+      self._advance(20000)
+    self.assertTrue(self._send_scc())  # new stretch of ours, new grace
+    self._advance(20000)
+    self._adrv_scc()
+    self.assertTrue(self._send_scc())
+
+  def test_watchdog_reset_on_init(self):
+    for _ in range(10):
+      self._send_scc()
+      self._advance(20000)
+    self._adrv_scc()
+    self.assertFalse(self._send_scc())
+    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    self.assertTrue(self._send_scc())
+
+  def test_flag_requires_lka_steering_long(self):
+    # without op long, the flag doesn't allow sending SCC_CONTROL or change the TX list
+    self.safety.set_safety_hooks(self.SAFETY_MODEL, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
+    self.assertFalse(self._tx(self._accel_msg(0)))
+    self.assertTrue(self._tx(common.make_msg(0, 0x2a4, 24)))
 
 
 # Tests longitudinal for ICE, hybrid, EV cars with LFA steering

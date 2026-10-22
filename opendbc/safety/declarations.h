@@ -241,6 +241,7 @@ typedef struct {
   compute_checksum_t compute_checksum;
   get_counter_t get_counter;
   get_quality_flag_valid_t get_quality_flag_valid;
+  rx_hook rx_all;  // sunnypilot: optional, sees every received frame (not just rx-checked ones)
 } safety_hooks;
 
 bool safety_rx_hook(const CANPacket_t *msg);
