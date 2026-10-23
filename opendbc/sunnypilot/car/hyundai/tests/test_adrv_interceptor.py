@@ -253,5 +253,88 @@ class TestAdrvInterceptorLong(unittest.TestCase):
       CarInterface.init(CP, CP_SP, lambda *a, **k: [], lambda msgs: sent.extend(msgs))
       self.assertEqual(expect_disable, any(m.address == 0x730 for m in sent), f"{interceptor_long=}")
 
+
+MS = 1_000_000
+
+
+def _ioniq5_lka(op_long=False, lat=False):
+  from opendbc.car.hyundai.interface import CarInterface
+  CP = CarInterface.get_non_essential_params("HYUNDAI_IONIQ_5")
+  # the gen5w Ioniq 5 (HDA2): ADRV-routed SCC, standard buttons (non-essential params are generic)
+  CP.flags |= HyundaiFlags.CANFD_LKA_STEER_MSG.value
+  CP.flags &= ~(HyundaiFlags.CANFD_CAMERA_SCC.value | HyundaiFlags.CANFD_ALT_BUTTONS.value)
+  CP.openpilotLongitudinalControl = op_long
+  return CP, structs.CarParamsSP()
+
+
+class TestAdrvLongWatch(unittest.TestCase):
+  """Interceptor long, car side: the ADRV's SCC_CONTROL back on E-CAN faults openpilot long."""
+
+  def _watch(self, enabled=True):
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    if enabled:
+      ai.enable_interceptor_long(CP, CP_SP)
+    return ai.AdrvLongWatch(CP, CP_SP)
+
+  def setUp(self):
+    self.w = self._watch()
+    self.t = 1000 * MS
+
+  def _step(self, adrv_age=None, sent=True, dt=10 * MS):
+    self.t += dt
+    if sent:
+      self.w.mark_sent()
+    self.w.update(self.t - adrv_age if adrv_age is not None else 0, self.t)
+
+  def test_enabled_only_with_flag(self):
+    self.assertTrue(self.w.enabled)
+    self.assertFalse(self._watch(enabled=False).enabled)
+
+  def test_adrv_scc_before_we_send_is_fine(self):
+    for _ in range(100):
+      self._step(adrv_age=5 * MS, sent=False)
+    self.assertFalse(self.w.fault)
+
+  def test_handover_grace(self):
+    for _ in range(20):  # 200 ms of ours while the ADRV's is still around: the red panda taking over
+      self._step(adrv_age=5 * MS)
+    self.assertFalse(self.w.fault)
+
+  def test_fault_when_adrv_scc_reappears(self):
+    for _ in range(50):  # 500 ms of ours, ADRV's gone
+      self._step()
+    self._step(adrv_age=5 * MS)  # it's back: red panda not blocking, or our frames dropped by our panda
+    self.assertTrue(self.w.fault)
+    for _ in range(100):  # latched
+      self._step(sent=False)
+    self.assertTrue(self.w.fault)
+
+  def test_stale_adrv_scc_ignored(self):
+    for _ in range(50):
+      self._step(adrv_age=500 * MS)  # last seen long before: not fresh
+    self.assertFalse(self.w.fault)
+
+  def test_parser_registers_scc_without_liveness(self):
+    from opendbc.car import Bus
+    from opendbc.car.hyundai.carstate import CarState
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    pt = CarState(CP, CP_SP).get_can_parsers(CP, CP_SP)[Bus.pt]
+    self.assertTrue(pt.message_states[0x1A0].ignore_alive)
+
+  def test_controller_marks_sent(self):
+    from opendbc.car.hyundai.values import DBC
+    from opendbc.car.hyundai.carcontroller import CarController
+    from opendbc.car.hyundai.carstate import CarState
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    ai.enable_interceptor_long(CP, CP_SP)
+    cc, cs = CarController(DBC["HYUNDAI_IONIQ_5"], CP, CP_SP), CarState(CP, CP_SP)
+    CC = structs.CarControl()
+    cs.out = structs.CarState()
+    cs.main_cruise_enabled = True
+    cs.lfa_block_msg = {**{f"BYTE{i}": 0 for i in range(3, 24) if i != 7}, "COUNTER": 0}
+    cc.frame = 0
+    cc.create_canfd_msgs(False, 0, 0, 0.0, False, CC.hudControl, cs, CC)
+    self.assertTrue(cs.adrv_long_watch._sent_this_frame)
+
 if __name__ == "__main__":
   unittest.main()

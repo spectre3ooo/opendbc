@@ -251,6 +251,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                          set_speed_in_units, hud_control, self.lead_data, CS.main_cruise_enabled, self.tuning))
         self.accel_last = accel
+      long_watch = getattr(CS, "adrv_long_watch", None)
+      if adrv_long and long_watch is not None:
+        long_watch.mark_sent()
     else:
       # button presses
       if (self.frame - self.last_button_frame) * DT_CTRL > 0.25:

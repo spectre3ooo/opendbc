@@ -126,8 +126,12 @@ class AdrvInterceptor:
 # Stock openpilot long on LKA-steering cars knocks the ADAS Driving ECU out (0x730) and fakes its
 # messages, which also removes AEB/FCA. Through the interceptor the ADRV stays alive: the red panda
 # blocks only its SCC_CONTROL while the comma's is fresh. So the comma must not send the knockout,
-# the ADRV fakes (0x160 is the ADRV's AEB path) or its own 0x12A/0x1E0 (the ADRV still sends those,
-# relaying the comma's LKAS steering as with stock longitudinal).
+# the ADRV fakes, or its own 0x12A/0x1E0 (the ADRV still sends those, relaying the comma's LKAS
+# steering as with stock longitudinal).
+# UNVERIFIED: where the ADRV's AEB brake request travels. ADRV_0x160 changed during a logged FCA
+# evasive-steering event, but no AEB braking event has been captured, and on Hyundai CAN cars AEB
+# rides inside the SCC message. If it rides in 0x1A0 here, blocking 0x1A0 blocks AEB. Don't treat
+# this mode as AEB-preserving until that's settled.
 
 def interceptor_long_eligible(CP: structs.CarParams) -> bool:
   return bool(CP.flags & HyundaiFlags.CANFD and CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG and
@@ -146,3 +150,41 @@ def enable_interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -
 def interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> bool:
   # getattr: CarInterface.deinit calls init without CP_SP
   return interceptor_long_eligible(CP) and bool(getattr(CP_SP, "flags", 0) & HyundaiFlagsSP.ADRV_INTERCEPTOR_LONG)
+
+
+SCC_FRESH_NS = 100_000_000  # the ADRV sends SCC_CONTROL at 50 Hz
+SCC_GRACE_NS = 300_000_000  # after we start sending SCC_CONTROL, the ADRV's must be gone within this
+
+
+class AdrvLongWatch:
+  """Interceptor long, car side: the ADRV's SCC_CONTROL must stay off E-CAN while we send ours.
+
+  If it shows up there after the handover grace, either the red panda isn't blocking it (two SCC
+  sources) or the comma's panda latched its own SCC watchdog and is dropping our frames (so the red
+  panda timed out and passed the ADRV's again). Either way openpilot long isn't in control: fault
+  for the drive. CarState reports it as accFaulted, which disengages and refuses re-engagement.
+  """
+  def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
+    self.CP = CP
+    self.CP_SP = CP_SP
+    self.fault = False  # latched for the drive
+    self._sent_since = None
+    self._sent_this_frame = False
+
+  @property
+  def enabled(self):
+    return interceptor_long(self.CP, self.CP_SP)
+
+  def update(self, adrv_scc_nanos, now_nanos):
+    if self._sent_this_frame:
+      self._sent_since = now_nanos if self._sent_since is None else self._sent_since
+    else:
+      self._sent_since = None
+    self._sent_this_frame = False
+
+    adrv_scc_fresh = adrv_scc_nanos > 0 and 0 <= now_nanos - adrv_scc_nanos <= SCC_FRESH_NS
+    if self._sent_since is not None and now_nanos - self._sent_since > SCC_GRACE_NS and adrv_scc_fresh:
+      self.fault = True
+
+  def mark_sent(self):
+    self._sent_this_frame = True

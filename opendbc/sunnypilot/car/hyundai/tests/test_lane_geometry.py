@@ -81,8 +81,22 @@ class TestLaneGeometry(unittest.TestCase):
     ys = np.zeros((4, len(X)))
     msgs = lg.create_lane_geometry(self.packer, BUS, X, ys, [0.1, 0.9, 0.9, 0.1], counter=0)
     adj = msgs[1][1]
-    self.assertEqual(adj[3:7], b"\x00\x00\x00\x00")  # raw 0 position = no adjacent line
+    self.assertEqual(adj[3:], bytes(len(adj) - 3))  # what the camera sends: every field raw 0
 
+  def test_out_of_range_clamps_not_wraps(self):
+    # a tight curve whose cubic exceeds the field range: must saturate on the same side
+    sharp = -5.0 + -0.5 * X - 0.05 * X ** 2 - 0.001 * X ** 3
+    ys = [sharp, sharp, -sharp, -sharp]
+    msgs = lg.create_lane_geometry(self.packer, BUS, X, ys, [0.9, 0.9, 0.9, 0.9], counter=1)
+    ego = _parse("CAM_0x2a2", 0x2A2, [msgs[0][1].hex()])
+    fit = lg.fit_line(X, sharp)
+    for field, (scale, offset) in lg.FIELDS.items():
+      lo, hi = offset, offset + lg.RAW_MAX * scale
+      for side, value in (("LEFT", fit[field]), ("RIGHT", -fit[field])):
+        expected = min(max(value, lo), hi)  # saturate on the same side, never wrap
+        self.assertAlmostEqual(ego[f"{side}_{field}"], expected, delta=abs(scale), msg=f"{side} {field}")
+    # the left heading/curvature/rate really are beyond range here, so this exercises the clamp
+    self.assertLess(fit["CURVATURE_RATE"], lg.FIELDS["CURVATURE_RATE"][1])
 
 if __name__ == "__main__":
   unittest.main()

@@ -25,10 +25,27 @@ CAM_LANE_ADJ_MSG = 0x2A3
 # own fit matches them worse (measured on the Ioniq 5 logs)
 FIT_MAX_X = 50.
 
-# Raw values the camera sends when it has no line, written as physical values under the DBC
-# scale/offset. Ego and adjacent lines differ only in position: 0 m for ego, raw 0 (-10 m) for adjacent.
+# DBC scale and offset per field (raw = (value - offset) / scale, 16-bit unsigned)
+FIELDS = {
+  "POSITION": (0.01, -10.),
+  "HEADING": (0.000976563, -0.356445),
+  "CURVATURE": (2e-06, -0.065506),
+  "CURVATURE_RATE": (2e-08, -0.00065422),
+}
+# the camera never sends above this raw value (0xFF87); it clamps rather than wrapping
+RAW_MAX = 65415
+
+# What the camera sends when it has no line, as physical values. Ego: its "zero" defaults
+# (raw 1000/365/32753/32707). Adjacent: every field raw 0 (98% of 96k absent-line frames in the logs).
 NO_LINE = {"POSITION": 0., "HEADING": 0., "CURVATURE": 0., "CURVATURE_RATE": -4 * 2e-08}
-NO_ADJ_LINE = {**NO_LINE, "POSITION": -10.}
+NO_ADJ_LINE = {k: offset for k, (_, offset) in FIELDS.items()}
+
+
+def clamp(field, value):
+  """Clamp to what the field can carry, like the camera: out-of-range values must not wrap
+  around to the opposite extreme (e.g. a sharp curve read as a sharp curve the other way)."""
+  scale, offset = FIELDS[field]
+  return min(max(value, offset), offset + RAW_MAX * scale)
 
 
 def fit_line(x, y, max_x=FIT_MAX_X):
@@ -41,7 +58,7 @@ def fit_line(x, y, max_x=FIT_MAX_X):
 
 
 def _side_values(prefix, side, line):
-  return {f"{prefix}{side}_{k}": float(v) for k, v in line.items()}
+  return {f"{prefix}{side}_{k}": clamp(k, float(v)) for k, v in line.items()}
 
 
 def lane_geometry_values(x, left_y, right_y, left_valid, right_valid, adjacent=False):
