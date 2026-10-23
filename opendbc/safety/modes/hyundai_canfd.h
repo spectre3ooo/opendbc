@@ -69,7 +69,18 @@ static bool hyundai_canfd_scc_tx_active(uint32_t ts) {
   return hyundai_canfd_scc_tx_seen && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_last) <= HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US);
 }
 
+// Retire expired state when observed, so a full timer period cannot make an old
+// command look fresh again during continued traffic or stock fallback.
+static void hyundai_canfd_adrv_expire_tx(uint32_t ts) {
+  if (!hyundai_canfd_scc_tx_active(ts)) {
+    hyundai_canfd_scc_tx_seen = false;
+  }
+}
+
 static void hyundai_canfd_rx_all_hook(const CANPacket_t *msg) {
+  if (hyundai_canfd_adrv_interceptor_long) {
+    hyundai_canfd_adrv_expire_tx(microsecond_timer_get());
+  }
   // our own SCC_CONTROL never comes back through here, so any 0x1A0 on E-CAN is the ADRV's
   if (hyundai_canfd_adrv_interceptor_long && (msg->addr == 0x1a0U) && (msg->bus == 1U)) {
     const uint32_t ts = microsecond_timer_get();
@@ -173,6 +184,9 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
 }
 
 static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+  if (hyundai_canfd_adrv_interceptor_long) {
+    hyundai_canfd_adrv_expire_tx(microsecond_timer_get());
+  }
   const TorqueSteeringLimits HYUNDAI_CANFD_STEERING_LIMITS = {
     .max_torque = 270,
     .max_rt_delta = 112,

@@ -415,6 +415,17 @@ class TestHyundaiCanfdLKASteeringLongAdrvInterceptorEV(TestHyundaiCanfdLKASteeri
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, self.safety.get_current_safety_param())
     self.assertTrue(self._send_scc())
 
+  def test_expired_scc_watchdog_does_not_reappear_after_full_timer_period(self):
+    for _ in range(10):
+      self.assertTrue(self._send_scc())
+      self._advance(20000)
+    last_tx = self.t - 20000
+    self._advance(150001)
+    self._adrv_scc()  # observed stock fallback after expiry
+    self.safety.set_timer(last_tx + 1)  # one full timer period after the last TX
+    self._adrv_scc()
+    self.assertTrue(self._send_scc())
+
   def test_low_speed_rate_schedule_applies_to_lkas(self):
     # the Ioniq 5 runs the speed-scheduled torque rate (CANFD_LOW_SPEED_RATE); with the interceptor
     # it must limit LKAS, which is what steers: 4 counts/frame allowed at low speed, 2 without the schedule
