@@ -426,6 +426,19 @@ class TestHyundaiCanfdLKASteeringLongAdrvInterceptorEV(TestHyundaiCanfdLKASteeri
     self._adrv_scc()
     self.assertTrue(self._send_scc())
 
+  def test_scc_grace_does_not_reopen_after_full_timer_period(self):
+    # A transmit stretch longer than one timer period must not get a second grace window.
+    step = 140000
+    target = step + (1 << 32) + 30000  # 30 ms into the wrapped grace window of the first TX
+    elapsed = 0
+    while elapsed + step <= target:
+      elapsed += step
+      self.safety.set_timer(elapsed & 0xFFFFFFFF)
+      self.assertTrue(self._send_scc())
+    self.safety.set_timer(target & 0xFFFFFFFF)
+    self._adrv_scc()
+    self.assertFalse(self._send_scc())
+
   def test_low_speed_rate_schedule_applies_to_lkas(self):
     # the Ioniq 5 runs the speed-scheduled torque rate (CANFD_LOW_SPEED_RATE); with the interceptor
     # it must limit LKAS, which is what steers: 4 counts/frame allowed at low speed, 2 without the schedule

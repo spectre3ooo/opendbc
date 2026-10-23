@@ -47,8 +47,6 @@
 
 static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_lka_steer_msg_alt = false;
-// sunnypilot: the comma replaces the camera's lane geometry (CAM_0x2A2/0x2A3) on A-CAN
-static bool hyundai_canfd_lane_feed = false;
 
 // sunnypilot: longitudinal through the red-panda ADRV interceptor (LKA-steering cars). The ADAS
 // Driving ECU stays alive, so its AEB/FCA keep working; the red panda blocks only its SCC_CONTROL
@@ -64,14 +62,20 @@ static bool hyundai_canfd_adrv_scc_fault = false;
 static bool hyundai_canfd_scc_tx_seen = false;
 static uint32_t hyundai_canfd_scc_tx_last = 0U;
 static uint32_t hyundai_canfd_scc_tx_start = 0U;
+// Latched once a stretch outlives its handover grace, so a stretch longer than one
+// timer period cannot wrap back into a second grace window.
+static bool hyundai_canfd_scc_tx_grace_done = false;
 
 static bool hyundai_canfd_scc_tx_active(uint32_t ts) {
   return hyundai_canfd_scc_tx_seen && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_last) <= HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US);
 }
 
 // Retire expired state when observed, so a full timer period cannot make an old
-// command look fresh again during continued traffic or stock fallback.
+// command look fresh again (or reopen its handover grace) during continued traffic or stock fallback.
 static void hyundai_canfd_adrv_expire_tx(uint32_t ts) {
+  if (hyundai_canfd_scc_tx_active(ts) && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_start) > HYUNDAI_CANFD_ADRV_SCC_GRACE_US)) {
+    hyundai_canfd_scc_tx_grace_done = true;
+  }
   if (!hyundai_canfd_scc_tx_active(ts)) {
     hyundai_canfd_scc_tx_seen = false;
   }
@@ -84,7 +88,7 @@ static void hyundai_canfd_rx_all_hook(const CANPacket_t *msg) {
   // our own SCC_CONTROL never comes back through here, so any 0x1A0 on E-CAN is the ADRV's
   if (hyundai_canfd_adrv_interceptor_long && (msg->addr == 0x1a0U) && (msg->bus == 1U)) {
     const uint32_t ts = microsecond_timer_get();
-    if (hyundai_canfd_scc_tx_active(ts) && (safety_get_ts_elapsed(ts, hyundai_canfd_scc_tx_start) > HYUNDAI_CANFD_ADRV_SCC_GRACE_US)) {
+    if (hyundai_canfd_scc_tx_active(ts) && hyundai_canfd_scc_tx_grace_done) {
       hyundai_canfd_adrv_scc_fault = true;
       controls_allowed = false;
     }
@@ -301,6 +305,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
       const uint32_t ts = microsecond_timer_get();
       if (!hyundai_canfd_scc_tx_active(ts)) {
         hyundai_canfd_scc_tx_start = ts;  // a new stretch of ours: the red panda needs a moment to take over
+        hyundai_canfd_scc_tx_grace_done = false;
       }
       hyundai_canfd_scc_tx_last = ts;
       hyundai_canfd_scc_tx_seen = true;
@@ -382,13 +387,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
   hyundai_canfd_alt_buttons = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ALT_BUTTONS);
   hyundai_canfd_lka_steer_msg_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEER_MSG_ALT);
-  hyundai_canfd_lane_feed = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_LANE_FEED);
+  // sunnypilot: the comma replaces the camera's lane geometry (CAM_0x2A2/0x2A3) on A-CAN
+  const bool hyundai_canfd_lane_feed = GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_LANE_FEED);
   hyundai_canfd_adrv_interceptor_long = hyundai_longitudinal && hyundai_canfd_lka_steer_msg && !hyundai_canfd_lka_steer_msg_alt &&
                                         GET_FLAG(current_safety_param_sp, HYUNDAI_PARAM_SP_CANFD_ADRV_INTERCEPTOR_LONG);
   hyundai_canfd_adrv_scc_fault = false;
   hyundai_canfd_scc_tx_seen = false;
   hyundai_canfd_scc_tx_last = 0U;
   hyundai_canfd_scc_tx_start = 0U;
+  hyundai_canfd_scc_tx_grace_done = false;
 
   safety_config ret;
   if (hyundai_longitudinal) {
