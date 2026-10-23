@@ -261,7 +261,7 @@ class TestHyundaiCanfdLKASteeringLaneFeedEV(TestHyundaiCanfdLKASteeringEV):
   def test_lane_feed_requires_flag(self):
     # without the flag the camera's lane geometry is forwarded and the comma can't send its own
     self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.DEFAULT)
-    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, self.safety.get_current_safety_param())
     for addr in (0x2A2, 0x2A3):
       self.assertEqual(0, self.safety.safety_fwd_hook(2, addr))
       self.assertFalse(self._tx(common.make_msg(0, addr, 32)))
@@ -412,12 +412,25 @@ class TestHyundaiCanfdLKASteeringLongAdrvInterceptorEV(TestHyundaiCanfdLKASteeri
       self._advance(20000)
     self._adrv_scc()
     self.assertFalse(self._send_scc())
-    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, self.safety.get_current_safety_param())
     self.assertTrue(self._send_scc())
+
+  def test_low_speed_rate_schedule_applies_to_lkas(self):
+    # the Ioniq 5 runs the speed-scheduled torque rate (CANFD_LOW_SPEED_RATE); with the interceptor
+    # it must limit LKAS, which is what steers: 4 counts/frame allowed at low speed, 2 without the schedule
+    for sp, allowed in ((HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG | HyundaiSafetyFlagsSP.CANFD_LOW_SPEED_RATE, True),
+                        (HyundaiSafetyFlagsSP.CANFD_ADRV_INTERCEPTOR_LONG, False)):
+      self.safety.set_current_safety_param_sp(sp)
+      self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, self.safety.get_current_safety_param())
+      for _ in range(common.MAX_SAMPLE_VALS):
+        self._rx(self._speed_msg(round(5.0 * 3.6 / 0.03125)))  # 5 m/s
+      self.safety.set_controls_allowed(True)
+      self._set_prev_torque(0)
+      self.assertEqual(allowed, self._tx(self._torque_cmd_msg(4)), f"{sp=}")
 
   def test_flag_requires_lka_steering_long(self):
     # without op long, the flag doesn't allow sending SCC_CONTROL or change the TX list
-    self.safety.set_safety_hooks(self.SAFETY_MODEL, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS)
     self.assertFalse(self._tx(self._accel_msg(0)))
     self.assertTrue(self._tx(common.make_msg(0, 0x2a4, 24)))
 
