@@ -366,6 +366,7 @@ extern const safety_hooks gm_hooks;
 extern const safety_hooks honda_nidec_hooks;
 extern const safety_hooks honda_bosch_hooks;
 extern const safety_hooks hyundai_canfd_hooks;
+extern const safety_hooks hyundai_canfd_adrv_interceptor_hooks;
 extern const safety_hooks hyundai_hooks;
 extern const safety_hooks hyundai_legacy_hooks;
 extern const safety_hooks mazda_hooks;
