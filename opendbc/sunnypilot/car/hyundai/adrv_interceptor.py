@@ -154,6 +154,11 @@ def interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> bool:
 
 SCC_FRESH_NS = 100_000_000  # the ADRV sends SCC_CONTROL at 50 Hz
 SCC_GRACE_NS = 300_000_000  # after we start sending SCC_CONTROL, the ADRV's must be gone within this
+# An update gap longer than this means openpilot stalled long enough that the red panda (150 ms
+# timeout) may have released its takeover: the next send is a new takeover with a new grace. Matches
+# the comma panda's own freshness window (HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US), so both sides agree on
+# when a stretch of ours ends.
+UPDATE_STALL_NS = 120_000_000
 
 
 class AdrvLongWatch:
@@ -170,12 +175,16 @@ class AdrvLongWatch:
     self.fault = False  # latched for the drive
     self._sent_since = None
     self._sent_this_frame = False
+    self._last_update_nanos = None
 
   @property
   def enabled(self):
     return interceptor_long(self.CP, self.CP_SP)
 
   def update(self, adrv_scc_nanos, now_nanos):
+    if self._last_update_nanos is not None and now_nanos - self._last_update_nanos > UPDATE_STALL_NS:
+      self._sent_this_frame = False
+    self._last_update_nanos = now_nanos
     if self._sent_this_frame:
       self._sent_since = now_nanos if self._sent_since is None else self._sent_since
     else:

@@ -426,9 +426,21 @@ class TestHyundaiCanfdLKASteeringLongAdrvInterceptorEV(TestHyundaiCanfdLKASteeri
     self._adrv_scc()
     self.assertTrue(self._send_scc())
 
+  def test_scc_freshness_window_is_under_red_panda_timeout(self):
+    # Ours expires at 120 ms, under the red panda's 150 ms: a send gap the red panda treats as a
+    # stop (passing the ADRV's SCC_CONTROL again) must end our stretch too, not latch a fault.
+    for gap, faults in ((120000, True), (120001, False)):
+      self.setUp()
+      for _ in range(10):
+        self.assertTrue(self._send_scc())
+        self._advance(20000)
+      self._advance(gap - 20000)
+      self._adrv_scc()
+      self.assertEqual(not faults, self._send_scc(), gap)
+
   def test_scc_grace_does_not_reopen_after_full_timer_period(self):
     # A transmit stretch longer than one timer period must not get a second grace window.
-    step = 140000
+    step = 110000
     target = step + (1 << 32) + 30000  # 30 ms into the wrapped grace window of the first TX
     elapsed = 0
     while elapsed + step <= target:

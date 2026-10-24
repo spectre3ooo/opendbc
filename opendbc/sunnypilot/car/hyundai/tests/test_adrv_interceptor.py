@@ -309,6 +309,26 @@ class TestAdrvLongWatch(unittest.TestCase):
       self._step(sent=False)
     self.assertTrue(self.w.fault)
 
+  def test_stall_restarts_handover_grace(self):
+    # An openpilot stall longer than the red panda's 150 ms timeout lets the ADRV's SCC_CONTROL
+    # back on E-CAN. When we resume, that's a new takeover with a new grace, not a fault.
+    for _ in range(50):
+      self._step()
+    self._step(adrv_age=5 * MS, dt=200 * MS)
+    for _ in range(10):  # the red panda blocks again within the grace
+      self._step(adrv_age=5 * MS)
+    for _ in range(50):
+      self._step()
+    self.assertFalse(self.w.fault)
+
+  def test_stall_still_faults_if_adrv_scc_stays(self):
+    for _ in range(50):
+      self._step()
+    self._step(adrv_age=5 * MS, dt=200 * MS)
+    for _ in range(40):  # the red panda doesn't block again
+      self._step(adrv_age=5 * MS)
+    self.assertTrue(self.w.fault)
+
   def test_stale_adrv_scc_ignored(self):
     for _ in range(50):
       self._step(adrv_age=500 * MS)  # last seen long before: not fresh

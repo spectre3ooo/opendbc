@@ -55,7 +55,9 @@ static bool hyundai_canfd_lka_steer_msg_alt = false;
 // Watchdog: if the ADRV's SCC_CONTROL still reaches E-CAN while we're sending ours, the red panda
 // isn't blocking, and the car would see two SCC sources. Then we stop sending SCC_CONTROL for the
 // rest of the drive, and the car falls back to the ADRV alone.
-#define HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US 150000U  // the red panda's own freshness timeout
+// Under the red panda's 150 ms freshness timeout: a send gap long enough for the red panda to pass
+// the ADRV's frame again must end our stretch too, or the ADRV's frame would latch a false fault.
+#define HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US 120000U
 #define HYUNDAI_CANFD_ADRV_SCC_GRACE_US 100000U    // handover: the red panda blocks from the ADRV's next frame
 static bool hyundai_canfd_adrv_interceptor_long = false;
 static bool hyundai_canfd_adrv_scc_fault = false;
