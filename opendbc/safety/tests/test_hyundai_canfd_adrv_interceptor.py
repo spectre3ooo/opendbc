@@ -78,6 +78,29 @@ class TestHyundaiCanfdAdrvInterceptor(unittest.TestCase):
     for addr in INTERCEPTED:
       self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
 
+  def test_expired_takeover_stays_retired_after_full_timer_period(self):
+    for observed_addr in (0xA0, *INTERCEPTED):
+      with self.subTest(observed_addr=hex(observed_addr)):
+        self.setUp()
+        for addr in INTERCEPTED:
+          self._op(addr)
+        self._advance(TIMEOUT_US + 1)
+        # Any observed traffic must retire expired state for all intercepted addresses.
+        self._fwd(ADRV_BUS, observed_addr)
+        self._advance((1 << 32) - TIMEOUT_US)
+        for addr in INTERCEPTED:
+          self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+
+        # Fresh comma traffic can take over again after the old state was retired.
+        for addr in INTERCEPTED:
+          self._op(addr)
+        self._advance(TIMEOUT_US)
+        for addr in INTERCEPTED:
+          self.assertEqual(-1, self._fwd(ADRV_BUS, addr))
+        self._advance(1)
+        for addr in INTERCEPTED:
+          self.assertEqual(CAR_BUS, self._fwd(ADRV_BUS, addr))
+
   def test_continuous_comma_keeps_blocking(self):
     for _ in range(100):
       for addr in INTERCEPTED:

@@ -61,8 +61,23 @@ static bool hyundai_canfd_adrv_interceptor_tx_hook(const CANPacket_t *msg) {
 }
 // GCOV_EXCL_STOP
 
+static bool hyundai_canfd_adrv_interceptor_op_active(const AdrvInterceptMsg *m, uint32_t ts) {
+  return m->op_seen && (safety_get_ts_elapsed(ts, m->op_last) <= HYUNDAI_CANFD_ADRV_INTERCEPTOR_TIMEOUT_US);
+}
+
+// Retire expiry observed during traffic so old takeover state cannot become fresh
+// again after a full timer period. A new car-side frame explicitly rearms its address.
+static void hyundai_canfd_adrv_interceptor_expire(uint32_t ts) {
+  for (unsigned int i = 0; i < ADRV_INTERCEPT_MSG_CNT; i++) {
+    if (!hyundai_canfd_adrv_interceptor_op_active(&adrv_intercept_msgs[i], ts)) {
+      adrv_intercept_msgs[i].op_seen = false;
+    }
+  }
+}
+
 static bool hyundai_canfd_adrv_interceptor_fwd_hook(int bus_num, int addr) {
   const uint32_t ts = microsecond_timer_get();
+  hyundai_canfd_adrv_interceptor_expire(ts);
 
   AdrvInterceptMsg *m = NULL;
   for (unsigned int i = 0; i < ADRV_INTERCEPT_MSG_CNT; i++) {
@@ -82,9 +97,7 @@ static bool hyundai_canfd_adrv_interceptor_fwd_hook(int bus_num, int addr) {
       block = true;
     } else if (bus_num == HYUNDAI_CANFD_ADRV_INTERCEPTOR_ADRV_BUS) {
       // block the ADRV's copy only while the comma is actively replacing this message
-      const bool op_active = m->op_seen &&
-        (safety_get_ts_elapsed(ts, m->op_last) <= HYUNDAI_CANFD_ADRV_INTERCEPTOR_TIMEOUT_US);
-      block = op_active;
+      block = hyundai_canfd_adrv_interceptor_op_active(m, ts);
     } else {
       // other buses: no action
     }
