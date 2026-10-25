@@ -339,13 +339,19 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       ]
     if self.CP_SP.flags & HyundaiFlagsSP.ADRV_INTERCEPTOR:
       msgs += [("LFA", 100)]  # the ADRV's own 0x12A, to carry its warning fields when the comma takes over
-    if adrv_interceptor.interceptor_long_eligible(CP) and not CP.flags & HyundaiFlags.CANFD_CAMERA_SCC:
+    watch_adrv_scc = adrv_interceptor.interceptor_long_eligible(CP) and not CP.flags & HyundaiFlags.CANFD_CAMERA_SCC
+    if watch_adrv_scc:
       # the ADRV's SCC_CONTROL, for AdrvLongWatch: only present when something's wrong, so no liveness check
       msgs += [("SCC_CONTROL", float("nan"))]
-    return {
+    parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
     }
+    if watch_adrv_scc:
+      # Each leak past the red panda arrives with a jumped counter. Counter checks would hide the first
+      # leaked frame and let leaks pile up into a permanent canValid failure; the checksum still applies.
+      parsers[Bus.pt].message_states[0x1A0].ignore_counter = True
+    return parsers
 
   def get_can_parsers(self, CP, CP_SP):
     if CP.flags & HyundaiFlags.CANFD:

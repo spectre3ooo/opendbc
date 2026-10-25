@@ -341,6 +341,26 @@ class TestAdrvLongWatch(unittest.TestCase):
     pt = CarState(CP, CP_SP).get_can_parsers(CP, CP_SP)[Bus.pt]
     self.assertTrue(pt.message_states[0x1A0].ignore_alive)
 
+  def test_leaked_adrv_scc_does_not_poison_can_valid(self):
+    # Every leak of the ADRV's SCC_CONTROL past the red panda arrives with a jumped counter. Counter
+    # strikes must not accumulate into a permanent canValid failure, and the first leaked frame
+    # must already count as fresh.
+    from opendbc.can import CANPacker
+    from opendbc.car import Bus
+    from opendbc.car.hyundai.carstate import CarState
+    from opendbc.car.hyundai.values import DBC
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    pt = CarState(CP, CP_SP).get_can_parsers(CP, CP_SP)[Bus.pt]
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    t = 1000 * MS
+    for leak in range(8):
+      t += 500 * MS
+      msg = packer.make_can_msg("SCC_CONTROL", pt.bus, {"COUNTER": (leak * 37) % 256})
+      pt.update([(t, [msg])])
+      self.assertEqual(t, pt.ts_nanos["SCC_CONTROL"]["COUNTER"], leak)
+      # (the parser's other messages aren't fed here, so check this message's own counter strikes)
+      self.assertEqual(0, pt.message_states[0x1A0].counter_fail, leak)
+
   def test_controller_marks_sent(self):
     from opendbc.car.hyundai.values import DBC
     from opendbc.car.hyundai.carcontroller import CarController
