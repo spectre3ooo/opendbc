@@ -311,7 +311,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
 
     # interceptor long: the ADRV's SCC_CONTROL back on E-CAN means openpilot long isn't in control
     if self.adrv_long_watch.enabled:
-      self.adrv_long_watch.update(cp.ts_nanos["SCC_CONTROL"]["COUNTER"], cp._last_update_nanos)
+      self.adrv_long_watch.update(cp.ts_nanos["SCC_CONTROL"]["COUNTER"],
+                                  can_parsers[Bus.loopback].ts_nanos["SCC_CONTROL"]["COUNTER"], cp._last_update_nanos)
       ret.accFaulted = ret.accFaulted or self.adrv_long_watch.fault
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
@@ -348,9 +349,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
     }
     if watch_adrv_scc:
-      # Each leak past the red panda arrives with a jumped counter. Counter checks would hide the first
-      # leaked frame and let leaks pile up into a permanent canValid failure; the checksum still applies.
-      parsers[Bus.pt].message_states[0x1A0].ignore_counter = True
+      # Our own SCC_CONTROL as echoed back by the panda (bus 128 + E-CAN): only frames that actually
+      # reached the bus, which is what the red panda sees.
+      parsers[Bus.loopback] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("SCC_CONTROL", float("nan"))], 128 + CanBus(CP).ECAN)
+      # Each leak past the red panda arrives with a jumped counter, and frames our panda rejects leave
+      # gaps in the echoed one. Counter checks would hide the first leaked frame and let leaks pile up
+      # into a permanent canValid failure; the checksum still applies.
+      for cp in (parsers[Bus.pt], parsers[Bus.loopback]):
+        cp.message_states[0x1A0].ignore_counter = True
     return parsers
 
   def get_can_parsers(self, CP, CP_SP):

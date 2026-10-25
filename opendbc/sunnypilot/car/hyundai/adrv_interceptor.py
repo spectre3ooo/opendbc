@@ -153,47 +153,71 @@ def interceptor_long(CP: structs.CarParams, CP_SP: structs.CarParamsSP) -> bool:
 
 
 SCC_FRESH_NS = 100_000_000  # the ADRV sends SCC_CONTROL at 50 Hz
-SCC_GRACE_NS = 300_000_000  # after we start sending SCC_CONTROL, the ADRV's must be gone within this
-# An update gap longer than this means openpilot stalled long enough that the red panda (150 ms
-# timeout) may have released its takeover: the next send is a new takeover with a new grace. Matches
-# the comma panda's own freshness window (HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US), so both sides agree on
-# when a stretch of ours ends.
+SCC_GRACE_NS = 300_000_000  # after ours reach the bus, the ADRV's must be gone within this
+# A gap longer than this ends a stretch of ours: the red panda (150 ms timeout) may have released its
+# takeover, so the next one is a new takeover with a new grace. Matches the comma panda's own
+# freshness window (HYUNDAI_CANFD_ADRV_SCC_TIMEOUT_US), so both sides agree on when a stretch ends.
 UPDATE_STALL_NS = 120_000_000
+# openpilot keeps building SCC frames but none has reached the bus for this long: our panda is
+# rejecting them (e.g. its SCC watchdog latched). Well above the ~200 ms the panda rejects frames at
+# ignition before pandad switches it into the car's safety mode.
+NOT_ON_BUS_NS = 1_000_000_000
 
 
 class AdrvLongWatch:
   """Interceptor long, car side: the ADRV's SCC_CONTROL must stay off E-CAN while we send ours.
 
-  If it shows up there after the handover grace, either the red panda isn't blocking it (two SCC
-  sources) or the comma's panda latched its own SCC watchdog and is dropping our frames (so the red
-  panda timed out and passed the ADRV's again). Either way openpilot long isn't in control: fault
-  for the drive. CarState reports it as accFaulted, which disengages and refuses re-engagement.
+  Our own SCC_CONTROL is tracked by its echo from the panda, i.e. the frames that actually reached the
+  bus, which is what the red panda sees. Openpilot long isn't in control, and this faults for the drive
+  (CarState reports accFaulted, which disengages and refuses re-engagement), when the ADRV's SCC_CONTROL
+  is on E-CAN while:
+  - ours has been on the bus for longer than the handover grace: the red panda isn't blocking it (two
+    SCC sources); or
+  - openpilot has been building frames but none has reached the bus for NOT_ON_BUS_NS: our panda is
+    dropping them (e.g. its own SCC watchdog latched), so the red panda passed the ADRV's again.
   """
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
     self.CP = CP
     self.CP_SP = CP_SP
     self.fault = False  # latched for the drive
-    self._sent_since = None
+    self._built_since = None   # openpilot has been building SCC frames since
     self._sent_this_frame = False
     self._last_update_nanos = None
+    self._last_echo = None     # our latest SCC_CONTROL seen on the bus
+    self._echo_since = None    # current stretch of ours on the bus started
 
   @property
   def enabled(self):
     return interceptor_long(self.CP, self.CP_SP)
 
-  def update(self, adrv_scc_nanos, now_nanos):
+  def update(self, adrv_scc_nanos, echo_nanos, now_nanos):
+    """adrv_scc_nanos: the ADRV's SCC_CONTROL on E-CAN; echo_nanos: our own, echoed back by the panda."""
     if self._last_update_nanos is not None and now_nanos - self._last_update_nanos > UPDATE_STALL_NS:
       self._sent_this_frame = False
     self._last_update_nanos = now_nanos
     if self._sent_this_frame:
-      self._sent_since = now_nanos if self._sent_since is None else self._sent_since
+      self._built_since = now_nanos if self._built_since is None else self._built_since
     else:
-      self._sent_since = None
+      self._built_since = None
     self._sent_this_frame = False
 
+    if echo_nanos > 0 and echo_nanos != self._last_echo:
+      if self._last_echo is None or echo_nanos - self._last_echo > UPDATE_STALL_NS:
+        self._echo_since = echo_nanos  # a new stretch of ours on the bus: the red panda takes over again
+      self._last_echo = echo_nanos
+    echo_fresh = self._last_echo is not None and 0 <= now_nanos - self._last_echo <= UPDATE_STALL_NS
+    if not echo_fresh:
+      self._echo_since = None
+
     adrv_scc_fresh = adrv_scc_nanos > 0 and 0 <= now_nanos - adrv_scc_nanos <= SCC_FRESH_NS
-    if self._sent_since is not None and now_nanos - self._sent_since > SCC_GRACE_NS and adrv_scc_fresh:
+    if not adrv_scc_fresh:
+      return
+    if self._echo_since is not None and now_nanos - self._echo_since > SCC_GRACE_NS:
       self.fault = True
+    if self._built_since is not None:
+      not_on_bus_since = self._built_since if self._last_echo is None else max(self._built_since, self._last_echo)
+      if now_nanos - not_on_bus_since > NOT_ON_BUS_NS:
+        self.fault = True
 
   def mark_sent(self):
     self._sent_this_frame = True

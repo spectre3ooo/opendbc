@@ -279,12 +279,20 @@ class TestAdrvLongWatch(unittest.TestCase):
   def setUp(self):
     self.w = self._watch()
     self.t = 1000 * MS
+    self.last_echo = 0
+    self.last_adrv = 0
 
-  def _step(self, adrv_age=None, sent=True, dt=10 * MS):
+  def _step(self, adrv_age=None, sent=True, dt=10 * MS, echo=None):
+    # sent: openpilot built an SCC frame last cycle; echo: the panda put one on the bus (by default,
+    # whenever it was built). Like the parser, both timestamps keep their last value between frames.
     self.t += dt
     if sent:
       self.w.mark_sent()
-    self.w.update(self.t - adrv_age if adrv_age is not None else 0, self.t)
+    if sent if echo is None else echo:
+      self.last_echo = self.t - 5 * MS
+    if adrv_age is not None:
+      self.last_adrv = self.t - adrv_age
+    self.w.update(self.last_adrv, self.last_echo, self.t)
 
   def test_enabled_only_with_flag(self):
     self.assertTrue(self.w.enabled)
@@ -328,6 +336,102 @@ class TestAdrvLongWatch(unittest.TestCase):
     for _ in range(40):  # the red panda doesn't block again
       self._step(adrv_age=5 * MS)
     self.assertTrue(self.w.fault)
+
+  def test_ignition_echoes_start_late(self):
+    # Until pandad switches the panda out of ELM327, our frames are rejected (85-184 ms on real
+    # drive starts). The handover grace must start at the first frame that reached the bus.
+    for _ in range(20):  # 200 ms of frames built but not on the bus; the ADRV's still flows
+      self._step(adrv_age=5 * MS, echo=False)
+    for _ in range(3):  # ours reach the bus; the red panda blocks from the ADRV's next frame
+      self._step(adrv_age=5 * MS)
+    for _ in range(100):
+      self._step()
+    self.assertFalse(self.w.fault)
+
+  def test_transport_gap_is_a_new_takeover(self):
+    # A 200 ms gap in what reached the bus (USB/pandad stall, while card keeps running): the red
+    # panda releases at 150 ms. Like the comma panda's watchdog, start a new grace when ours resume.
+    for _ in range(100):
+      self._step()
+    for i in range(20):
+      self._step(adrv_age=5 * MS if i >= 15 else None, echo=False)
+    for _ in range(3):
+      self._step(adrv_age=5 * MS)
+    for _ in range(100):
+      self._step()
+    self.assertFalse(self.w.fault)
+
+  def test_fault_when_our_panda_drops_our_frames(self):
+    # Our panda latched its own SCC watchdog (or otherwise rejects our frames): nothing of ours
+    # reaches the bus, the red panda releases, and the ADRV's SCC_CONTROL is back.
+    for _ in range(100):
+      self._step()
+    for i in range(95):  # 950 ms without an echo; the red panda releases the ADRV's after 150 ms
+      self._step(adrv_age=5 * MS if i >= 15 else None, echo=False)
+    self.assertFalse(self.w.fault)
+    for _ in range(10):
+      self._step(adrv_age=5 * MS, echo=False)
+    self.assertTrue(self.w.fault)
+
+  def test_fault_when_red_panda_never_blocks(self):
+    for _ in range(25):  # ours on the bus, the ADRV's never goes away
+      self._step(adrv_age=5 * MS)
+    self.assertFalse(self.w.fault)
+    for _ in range(10):
+      self._step(adrv_age=5 * MS)
+    self.assertTrue(self.w.fault)
+
+  def test_parser_registers_our_echo(self):
+    from opendbc.car import Bus
+    from opendbc.car.hyundai.carstate import CarState
+    from opendbc.car.hyundai.hyundaicanfd import CanBus
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    loopback = CarState(CP, CP_SP).get_can_parsers(CP, CP_SP)[Bus.loopback]
+    self.assertEqual(128 + CanBus(CP).ECAN, loopback.bus)
+    state = loopback.message_states[0x1A0]
+    self.assertTrue(state.ignore_alive)
+    self.assertTrue(state.ignore_counter)  # frames our panda rejects leave gaps in the echoed counter
+
+  def _carstate_run(self, frames, echo_from, adrv_until):
+    # Real CarState and parsers: openpilot builds SCC every 10 ms cycle (mark_sent), our panda puts
+    # it on the bus (echo, src 128 + E-CAN) from echo_from, the ADRV's own is on E-CAN until adrv_until.
+    from opendbc.can import CANPacker
+    from opendbc.car import Bus
+    from opendbc.car.hyundai.carstate import CarState
+    from opendbc.car.hyundai.values import DBC
+    CP, CP_SP = _ioniq5_lka(op_long=True, lat=False)
+    ai.enable_interceptor_long(CP, CP_SP)
+    cs = CarState(CP, CP_SP)
+    parsers = cs.get_can_parsers(CP, CP_SP)
+    packer = CANPacker(DBC[CP.carFingerprint][Bus.pt])
+    ecan = parsers[Bus.pt].bus
+    t = 1000 * MS
+    faulted = []
+    for f in range(frames):
+      t += 10 * MS
+      batch = []
+      if f >= echo_from and f % 2 == 0:
+        _, dat, _ = packer.make_can_msg("SCC_CONTROL", ecan, {"COUNTER": f % 256})
+        batch.append((0x1A0, dat, 128 + ecan))
+      if f < adrv_until and f % 2 == 1:
+        _, dat, _ = packer.make_can_msg("SCC_CONTROL", ecan, {"COUNTER": (f * 7) % 256})
+        batch.append((0x1A0, dat, ecan))
+      for cp in parsers.values():
+        cp.update([(t, batch)])
+      ret, _ = cs.update(parsers)
+      faulted.append(ret.accFaulted)
+      cs.adrv_long_watch.mark_sent()
+    return faulted
+
+  def test_carstate_ignition_does_not_fault(self):
+    # ours reach the bus 200 ms after openpilot starts building them (the panda is still in its
+    # startup mode); the ADRV's last frame gets through 60 ms after our first one
+    self.assertFalse(any(self._carstate_run(150, echo_from=20, adrv_until=26)))
+
+  def test_carstate_faults_when_red_panda_never_blocks(self):
+    faulted = self._carstate_run(150, echo_from=20, adrv_until=150)
+    self.assertFalse(any(faulted[:45]))  # inside the grace from the first echo (frame 20)
+    self.assertTrue(faulted[-1])
 
   def test_stale_adrv_scc_ignored(self):
     for _ in range(50):
