@@ -166,3 +166,17 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  adrvInterceptorState: 'CarStateSP.AdrvInterceptorState' = field(
+    default_factory=lambda: CarStateSP.AdrvInterceptorState.none
+  )
+  adrvMissing: bool = auto_field()
+
+  class AdrvInterceptorState(StrEnum):
+    # red panda ADRV interceptor fail-safe status (A-CAN 0x7F9); none = not fitted, or silent for 3 s
+    none = auto()
+    starting = auto()
+    engaged = auto()
+    trippedTraffic = auto()
+    trippedWatchdog = auto()
+    canUpdate = auto()
+    ignitionOff = auto()

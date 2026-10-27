@@ -14,6 +14,7 @@ from opendbc.sunnypilot.car.hyundai.escc import EsccCarStateBase
 from opendbc.sunnypilot.car.hyundai.mads import MadsCarState
 from opendbc.sunnypilot.car.hyundai import adrv_interceptor
 from opendbc.sunnypilot.car.hyundai.adrv_interceptor import AdrvLongWatch
+from opendbc.sunnypilot.car.hyundai.adrv_failsafe import AdrvInterceptorStatus, AdrvPresence, failsafe_watch_eligible
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -41,6 +42,10 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.lda_button = 0
     self.adrv_lfa = None  # last ADRV 0x12A seen, for the ADRV interceptor's warning fields
     self.adrv_long_watch = AdrvLongWatch(CP, CP_SP)  # interceptor long: the ADRV's SCC_CONTROL must stay off E-CAN
+    # red panda fail-safe: its status on A-CAN, and whether the ADRV is on E-CAN at all
+    self.adrv_failsafe_watch = failsafe_watch_eligible(CP, CP_SP)
+    self.adrv_presence = AdrvPresence()
+    self.adrv_status = AdrvInterceptorStatus()
 
     self.gear_msg_canfd = "ACCELERATOR" if CP.flags & HyundaiFlags.EV else \
                           "GEAR_ALT" if CP.flags & HyundaiFlags.CANFD_ALT_GEARS else \
@@ -315,6 +320,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
                                   can_parsers[Bus.loopback].ts_nanos["SCC_CONTROL"]["COUNTER"], cp._last_update_nanos)
       ret.accFaulted = ret.accFaulted or self.adrv_long_watch.fault
 
+    # red panda fail-safe: its status on A-CAN, and whether the ADRV is on E-CAN at all
+    if self.adrv_failsafe_watch:
+      now = cp._last_update_nanos
+      ret_sp.adrvMissing = self.adrv_presence.update(cp.ts_nanos["ADRV_0x160"]["COUNTER"], now)
+      cp_a = can_parsers[Bus.adas]
+      ret_sp.adrvInterceptorState = self.adrv_status.update(cp_a.vl["ADRV_INTERCEPTOR_STATUS"],
+                                                            cp_a.ts_nanos["ADRV_INTERCEPTOR_STATUS"]["STATE"], now)
+
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
@@ -344,6 +357,9 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if watch_adrv_scc:
       # the ADRV's SCC_CONTROL, for AdrvLongWatch: only present when something's wrong, so no liveness check
       msgs += [("SCC_CONTROL", float("nan"))]
+    if self.adrv_failsafe_watch:
+      # the ADRV itself, for AdrvPresence: its absence is what we report, so no liveness check
+      msgs += [("ADRV_0x160", float("nan"))]
     parsers = {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
@@ -357,6 +373,9 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       # into a permanent canValid failure; the checksum still applies.
       for cp in (parsers[Bus.pt], parsers[Bus.loopback]):
         cp.message_states[0x1A0].ignore_counter = True
+    if self.adrv_failsafe_watch:
+      # the red panda's fail-safe status: absent unless one is fitted and the ignition is on
+      parsers[Bus.adas] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("ADRV_INTERCEPTOR_STATUS", float("nan"))], CanBus(CP).ACAN)
     return parsers
 
   def get_can_parsers(self, CP, CP_SP):
