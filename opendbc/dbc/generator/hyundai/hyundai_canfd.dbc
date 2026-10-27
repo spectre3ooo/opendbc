@@ -227,6 +227,14 @@ BO_ 352 ADRV_0x160: 16 ADRV
  SG_ SET_ME_FC : 72|8@1+ (1,0) [0|255] "" XXX
  SG_ SET_ME_9 : 80|8@1+ (1,0) [0|255] "" XXX
 
+BO_ 2041 ADRV_INTERCEPTOR_STATUS: 8 XXX
+ SG_ PROTOCOL : 0|8@1+ (1,0) [0|255] "" XXX
+ SG_ STATE : 8|8@1+ (1,0) [0|255] "" XXX
+ SG_ FRAME_COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ FLAGS : 24|8@1+ (1,0) [0|255] "" XXX
+ SG_ UPTIME : 32|24@1+ (1,0) [0|16777215] "s" XXX
+ SG_ FRAME_CHECK : 56|8@1+ (1,0) [0|255] "" XXX
+
 BO_ 353 CCNC_0x161: 32 CCNC
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
  SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
@@ -949,6 +957,7 @@ CM_ SG_ 866 RIGHT_LANE_LINE "Right lane line confidence";
 CM_ SG_ 961 COUNTER_ALT "only increments on change";
 CM_ SG_ 1041 COUNTER_ALT "only increments on change";
 CM_ BO_ 1043 "Lamp signals do not seem universal on cars that use LKAS_ALT, but stalk signals do.";
+CM_ BO_ 2041 "Red panda ADRV interceptor fail-safe status, A-CAN, 1 Hz while ignition on; see panda docs/superpowers/specs/2026-10-26-red-panda-failsafe-design.md";
 CM_ SG_ 1043 COUNTER_ALT "only increments on change";
 CM_ SG_ 1043 USE_ALT_LAMP "likely 1 on cars that use alt lamp signals";
 VAL_ 53 GEAR 0 "P" 5 "D" 6 "N" 7 "R";
